@@ -1,5 +1,6 @@
 package com.example.hibuddy
 
+import android.content.Context
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
@@ -10,6 +11,7 @@ import android.util.Base64
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import okhttp3.*
@@ -23,16 +25,14 @@ import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
-    // INSERISCI QUI LA TUA API KEY DI GOOGLE AI STUDIO
-    private val API_KEY = "LA_TUA_API_KEY"
     private val MODEL = "models/gemini-2.0-flash-exp"
-    private val WS_URL = "wss://://googleapis.com"
 
     private var webSocket: WebSocket? = null
     private var isConnected = false
     private var isRecording = false
 
     private lateinit var statusText: TextView
+    private lateinit var etApiKey: EditText
     private lateinit var surfaceView: SurfaceView
     private var camera: Camera? = null
     private var lastFrameJpeg: ByteArray? = null
@@ -47,7 +47,27 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
+        etApiKey = findViewById(R.id.etApiKey)
         surfaceView = findViewById(R.id.cameraPreview)
+
+        val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+        val savedKey = prefs.getString("api_key", "") ?: ""
+        if (savedKey.isNotEmpty()) {
+            etApiKey.setText(savedKey)
+            updateStatus("Pronto (Chiave salvata)")
+        } else {
+            updateStatus("Inserisci e salva la tua API Key in alto")
+        }
+
+        findViewById<Button>(R.id.btnSaveKey).setOnClickListener {
+            val newKey = etApiKey.text.toString().trim()
+            if (newKey.isNotEmpty()) {
+                prefs.edit().putString("api_key", newKey).apply()
+                updateStatus("API Key salvata sul telefono!")
+            } else {
+                updateStatus("Campo vuoto: incolla una chiave valida")
+            }
+        }
 
         setupCamera()
         setupAudioOutput()
@@ -62,12 +82,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startSession() {
+        val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+        val API_KEY = prefs.getString("api_key", "")?.trim() ?: ""
+        if (API_KEY.isEmpty()) {
+            updateStatus("Inserisci e salva prima la API Key in alto")
+            return
+        }
+
+        val wsUrl = "wss://://googleapis.com"
+
         updateStatus("Connessione in corso...")
         val client = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
 
-        val request = Request.Builder().url(WS_URL).build()
+        val request = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 isConnected = true
@@ -233,24 +262,3 @@ class MainActivity : AppCompatActivity() {
                     }
                     camera?.startPreview()
                 } catch (e: Exception) {
-                    updateStatus("Errore camera: ${e.message}")
-                }
-            }
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                camera?.release()
-                camera = null
-            }
-        })
-    }
-
-    private fun stopSession() {
-        isRecording = false
-        webSocket?.close(1000, "Chiusura utente")
-        isConnected = false
-    }
-
-    private fun updateStatus(text: String) {
-        runOnUiThread { statusText.text = text }
-    }
-}
