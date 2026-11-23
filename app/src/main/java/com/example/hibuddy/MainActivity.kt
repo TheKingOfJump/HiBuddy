@@ -25,7 +25,7 @@ class MainActivity : AppCompatActivity() {
 
     // INSERISCI QUI LA TUA API KEY DI GOOGLE AI STUDIO
     private val API_KEY = "LA_TUA_API_KEY"
-    private val MODEL = "models/gemini-3.8-live"
+    private val MODEL = "models/gemini-2.0-flash-exp"
     private val WS_URL = "wss://://googleapis.com"
 
     private var webSocket: WebSocket? = null
