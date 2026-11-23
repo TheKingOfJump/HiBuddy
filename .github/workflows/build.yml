@@ -24,6 +24,11 @@ jobs:
       with:
         gradle-version: '8.2'
 
+    - name: Sistema URL Android
+      run: |
+        sed -i 's|xmlns:android="[^"]*"|xmlns:android="http://android.com"|g' app/src/main/AndroidManifest.xml
+        sed -i 's|xmlns:android="[^"]*"|xmlns:android="http://android.com"|g' app/src/main/res/layout/activity_main.xml
+
     - name: Compila APK
       run: gradle assembleDebug
 
