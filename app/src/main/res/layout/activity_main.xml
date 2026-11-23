@@ -3,8 +3,32 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp"
+    android:padding="12dp"
     android:background="#121212">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingBottom="8dp">
+
+        <EditText
+            android:id="@+id/etApiKey"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Incolla API Key Gemini..."
+            android:textColor="#FFFFFF"
+            android:textColorHint="#888888"
+            android:inputType="textPassword"
+            android:singleLine="true" />
+
+        <Button
+            android:id="@+id/btnSaveKey"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Salva" />
+    </LinearLayout>
 
     <SurfaceView
         android:id="@+id/cameraPreview"
@@ -18,7 +42,7 @@
         android:layout_height="wrap_content"
         android:text="Pronto"
         android:textColor="#FFFFFF"
-        android:padding="12dp"
+        android:padding="10dp"
         android:gravity="center" />
 
     <LinearLayout
