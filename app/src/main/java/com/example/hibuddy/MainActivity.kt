@@ -261,4 +261,25 @@ class MainActivity : AppCompatActivity() {
                         lastFrameJpeg = out.toByteArray()
                     }
                     camera?.startPreview()
-                } catch (e: Exception) {
+                } catch (e: Exception) {                    updateStatus("Errore camera: ${e.message}")
+                }
+            }
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                camera?.release()
+                camera = null
+            }
+        })
+    }
+
+    private fun stopSession() {
+        isRecording = false
+        webSocket?.close(1000, "Chiusura utente")
+        isConnected = false
+    }
+
+    private fun updateStatus(text: String) {
+        runOnUiThread { statusText.text = text }
+    }
+}
+
