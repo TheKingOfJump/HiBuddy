@@ -26,8 +26,12 @@ jobs:
 
     - name: Sistema URL Android
       run: |
-        sed -i 's|xmlns:android="[^"]*"|xmlns:android="http://android.com"|g' app/src/main/AndroidManifest.xml
-        sed -i 's|xmlns:android="[^"]*"|xmlns:android="http://android.com"|g' app/src/main/res/layout/activity_main.xml
+        U=$(echo "aHR0cDovL3NjaGVtYXMuYW5kcm9pZC5jb20vYXBrL3Jlcy9hbmRyb2lk" | base64 -d)
+        W=$(echo "d3NzOi8vZ2VuZXJhdGl2ZWxhbmd1YWdlLmdvb2dsZWFwaXMuY29tL3dzL2dvb2dsZS5haS5nZW5lcmF0aXZlbGFuZ3VhZ2UudjFiZXRhLkdlbmVyYXRpdmVTZXJ2aWNlLkJpZGlHZW5lcmF0ZUNvbnRlbnQ=" | base64 -d)
+        sed -i "s|xmlns:android=\"[^\"]*\"|xmlns:android=\"$U\"|g" app/src/main/AndroidManifest.xml
+        sed -i "s|xmlns:android=\"[^\"]*\"|xmlns:android=\"$U\"|g" app/src/main/res/layout/activity_main.xml
+        sed -i "s|wss://[^\"]*|${W}?key=\$API_KEY|g" app/src/main/java/com/example/hibuddy/MainActivity.kt
+
 
     - name: Compila APK
       run: gradle assembleDebug
