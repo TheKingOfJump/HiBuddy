@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spVoice: Spinner
     private var voiceName = "Aoede"
     private lateinit var cbWake: CheckBox
+    private lateinit var btnNotes: Button
     private lateinit var btnUpdate: Button
     private var camera: Camera? = null
     private var lastFrameJpeg: ByteArray? = null
@@ -198,6 +199,7 @@ class MainActivity : AppCompatActivity() {
         etMessage = findViewById(R.id.etMessage)
         spVoice = findViewById(R.id.spVoice)
         cbWake = findViewById(R.id.cbWake)
+        btnNotes = findViewById(R.id.btnNotes)
         btnUpdate = findViewById(R.id.btnUpdate)
 
         val versionLabel = try {
@@ -275,6 +277,8 @@ class MainActivity : AppCompatActivity() {
                 false
             }
         }
+
+        btnNotes.setOnClickListener { showNotes() }
 
         btnUpdate.setOnClickListener { downloadAndInstallUpdate() }
 
@@ -519,12 +523,62 @@ class MainActivity : AppCompatActivity() {
                         })
                     })
                 })
-                put("tools", JSONArray().put(JSONObject().apply {
-                    put("googleSearch", JSONObject())
-                }))
+                put("tools", JSONArray()
+                    .put(JSONObject().apply {
+                        put("functionDeclarations", JSONArray()
+                            .put(
+                                toolDeclaration(
+                                    "aggiungi_elemento",
+                                    "Aggiunge un elemento a una lista salvata, per esempio la lista della spesa.",
+                                    listOf(
+                                        "lista" to "Nome della lista, per esempio spesa",
+                                        "elemento" to "Cosa aggiungere"
+                                    )
+                                )
+                            )
+                            .put(
+                                toolDeclaration(
+                                    "leggi_lista",
+                                    "Legge il contenuto di una lista salvata.",
+                                    listOf("lista" to "Nome della lista, per esempio spesa")
+                                )
+                            )
+                            .put(
+                                toolDeclaration(
+                                    "rimuovi_elemento",
+                                    "Toglie un elemento da una lista salvata.",
+                                    listOf(
+                                        "lista" to "Nome della lista",
+                                        "elemento" to "Elemento da togliere"
+                                    )
+                                )
+                            )
+                            .put(
+                                toolDeclaration(
+                                    "svuota_lista",
+                                    "Svuota completamente una lista salvata.",
+                                    listOf("lista" to "Nome della lista")
+                                )
+                            )
+                            .put(
+                                toolDeclaration(
+                                    "elenca_liste",
+                                    "Elenca i nomi di tutte le liste salvate.",
+                                    emptyList()
+                                )
+                            )
+                        )
+                    })
+                    .put(JSONObject().apply {
+                        put("googleSearch", JSONObject())
+                    })
+                )
                 put("systemInstruction", JSONObject().apply {
                     put("parts", JSONArray().put(JSONObject().apply {
-                        put("text", "Sei HiBuddy, un assistente personale italiano conciso, amichevole e utile. Rispondi sempre in italiano a voce.")
+                        put("text", "Sei HiBuddy, un assistente personale italiano conciso, amichevole e utile. Rispondi sempre in italiano a voce. " +
+                            "Hai una memoria permanente fatta di liste (per esempio la lista della spesa): quando l'utente chiede di segnare, " +
+                            "ricordare o aggiungere qualcosa usa gli strumenti disponibili, quando chiede cosa manca o cosa c'e' nella lista " +
+                            "usa leggi_lista, e conferma sempre in una frase quello che hai salvato.")
                     }))
                 })
             } else {
@@ -619,6 +673,12 @@ class MainActivity : AppCompatActivity() {
             val apiError = json.optJSONObject("error")
             if (apiError != null) {
                 updateStatus("Errore API: ${apiError.optString("message")}")
+                return
+            }
+
+            val toolCall = json.optJSONObject("toolCall")
+            if (toolCall != null) {
+                handleToolCall(toolCall)
                 return
             }
 
@@ -760,6 +820,189 @@ class MainActivity : AppCompatActivity() {
                 camera = null
             }
         })
+    }
+
+    private fun notesFile() = File(filesDir, "liste.json")
+
+    private fun loadNotes(): JSONObject {
+        return try {
+            val file = notesFile()
+            if (file.exists()) JSONObject(file.readText()) else JSONObject()
+        } catch (t: Throwable) {
+            JSONObject()
+        }
+    }
+
+    private fun saveNotes(notes: JSONObject) {
+        try {
+            notesFile().writeText(notes.toString())
+        } catch (t: Throwable) {
+            debugLog("errore salvataggio note: ${t.message}")
+        }
+    }
+
+    private fun listKey(raw: String): String {
+        val clean = raw.trim().lowercase()
+        return if (clean.isEmpty()) "spesa" else clean
+    }
+
+    private fun addItem(listName: String, item: String): String {
+        val key = listKey(listName)
+        val element = item.trim()
+        if (element.isEmpty()) return "Nessun elemento indicato."
+        val notes = loadNotes()
+        val items = notes.optJSONArray(key) ?: JSONArray()
+        for (i in 0 until items.length()) {
+            if (items.optString(i).equals(element, ignoreCase = true)) {
+                return "$element e' gia' nella lista $key (${items.length()} elementi)."
+            }
+        }
+        items.put(element)
+        notes.put(key, items)
+        saveNotes(notes)
+        return "Aggiunto $element alla lista $key, che ora contiene ${items.length()} elementi."
+    }
+
+    private fun readList(listName: String): String {
+        val key = listKey(listName)
+        val items = loadNotes().optJSONArray(key)
+        if (items == null || items.length() == 0) return "La lista $key e' vuota."
+        val parts = mutableListOf<String>()
+        for (i in 0 until items.length()) parts.add(items.optString(i))
+        return "Lista $key: " + parts.joinToString(", ")
+    }
+
+    private fun removeItem(listName: String, item: String): String {
+        val key = listKey(listName)
+        val notes = loadNotes()
+        val items = notes.optJSONArray(key) ?: return "La lista $key non esiste."
+        val remaining = JSONArray()
+        var removed = false
+        for (i in 0 until items.length()) {
+            val value = items.optString(i)
+            if (!removed && value.equals(item.trim(), ignoreCase = true)) {
+                removed = true
+            } else {
+                remaining.put(value)
+            }
+        }
+        if (!removed) return "$item non e' nella lista $key."
+        notes.put(key, remaining)
+        saveNotes(notes)
+        return "Rimosso $item dalla lista $key."
+    }
+
+    private fun clearList(listName: String): String {
+        val key = listKey(listName)
+        val notes = loadNotes()
+        notes.remove(key)
+        saveNotes(notes)
+        return "Lista $key svuotata."
+    }
+
+    private fun listNames(): String {
+        val notes = loadNotes()
+        if (notes.length() == 0) return "Nessuna lista salvata."
+        val names = mutableListOf<String>()
+        val keys = notes.keys()
+        while (keys.hasNext()) names.add(keys.next())
+        return "Liste salvate: " + names.joinToString(", ")
+    }
+
+    private fun toolDeclaration(name: String, description: String, params: List<Pair<String, String>>): JSONObject {
+        val properties = JSONObject()
+        val required = JSONArray()
+        for ((key, desc) in params) {
+            properties.put(key, JSONObject().apply {
+                put("type", "STRING")
+                put("description", desc)
+            })
+            required.put(key)
+        }
+        val parameters = JSONObject().apply {
+            put("type", "OBJECT")
+            put("properties", properties)
+            if (required.length() > 0) put("required", required)
+        }
+        return JSONObject().apply {
+            put("name", name)
+            put("description", description)
+            put("parameters", parameters)
+        }
+    }
+
+    private fun handleToolCall(toolCall: JSONObject) {
+        val calls = toolCall.optJSONArray("functionCalls") ?: return
+        val responses = JSONArray()
+        for (i in 0 until calls.length()) {
+            val call = calls.getJSONObject(i)
+            val name = call.optString("name")
+            val args = call.optJSONObject("args") ?: JSONObject()
+            val result = when (name) {
+                "aggiungi_elemento" -> addItem(args.optString("lista"), args.optString("elemento"))
+                "leggi_lista" -> readList(args.optString("lista"))
+                "rimuovi_elemento" -> removeItem(args.optString("lista"), args.optString("elemento"))
+                "svuota_lista" -> clearList(args.optString("lista"))
+                "elenca_liste" -> listNames()
+                else -> "Strumento sconosciuto: $name"
+            }
+            debugLog("strumento $name -> $result")
+            responses.put(JSONObject().apply {
+                put("id", call.optString("id"))
+                put("name", name)
+                put("response", JSONObject().put("result", result))
+            })
+        }
+        val payload = JSONObject().put("toolResponse", JSONObject().put("functionResponses", responses))
+        webSocket?.send(payload.toString())
+    }
+
+    private fun showNotes() {
+        val notes = loadNotes()
+        val text = StringBuilder()
+        val keys = notes.keys()
+        if (!keys.hasNext()) {
+            text.append("Nessuna nota salvata.\n\n")
+            text.append("Prova a dire: \"HiBuddy, aggiungi il latte alla lista della spesa\".")
+        } else {
+            while (keys.hasNext()) {
+                val name = keys.next()
+                val items = notes.optJSONArray(name)
+                text.append("\u2022 ").append(name.uppercase()).append('\n')
+                if (items == null || items.length() == 0) {
+                    text.append("  (vuota)\n")
+                } else {
+                    for (i in 0 until items.length()) {
+                        text.append("  - ").append(items.optString(i)).append('\n')
+                    }
+                }
+                text.append('\n')
+            }
+        }
+        val view = TextView(this).apply {
+            this.text = text.toString()
+            textSize = 14f
+            setTextIsSelectable(true)
+            setPadding(24, 24, 24, 24)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Note e liste")
+            .setView(ScrollView(this).apply { addView(view) })
+            .setPositiveButton("Chiudi", null)
+            .setNeutralButton("Condividi") { _, _ -> shareNotes(text.toString()) }
+            .show()
+    }
+
+    private fun shareNotes(text: String) {
+        try {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+            startActivity(Intent.createChooser(intent, "Condividi note"))
+        } catch (t: Throwable) {
+            updateStatus("Impossibile condividere: ${t.message}")
+        }
     }
 
     private fun installCrashLogger() {
