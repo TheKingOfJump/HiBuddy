@@ -39,6 +39,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import okhttp3.*
+import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -90,6 +91,7 @@ class MainActivity : AppCompatActivity() {
     private val wakeHandler = Handler(Looper.getMainLooper())
 
     private var latestVersionCode: Int? = null
+    private var setupAttempt = 0
 
     private val INPUT_SAMPLE_RATE = 16000
     private val OUTPUT_SAMPLE_RATE = 24000
@@ -302,6 +304,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (audioTrack == null) setupAudioOutput()
+        setupAttempt = 0
         isSessionStarting = true
         stopWakeListening()
         clearTranscript()
@@ -354,12 +357,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun connectWebSocket(userToken: String, model: String) {
-        val proto = "wss://"
-        val sub = "generativelanguage"
-        val dom = ".googleapis.com"
-        val path = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-        val wsUrl = "$proto$sub$dom$path?key=$userToken"
+    private fun connectWebSocket(
+        userToken: String,
+        model: String,
+        apiVersion: String = "v1beta",
+        minimalSetup: Boolean = false
+    ) {
+        val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.$apiVersion" +
+            ".GenerativeService.BidiGenerateContent?key=$userToken"
 
         val client = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -368,26 +373,50 @@ class MainActivity : AppCompatActivity() {
         val request = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
-                isConnected = true
-                isSessionStarting = false
-                updateStatus("Configuro ${model.removePrefix("models/")}...")
-                debugLog("connessione aperta")
-                sendInitialSetup(ws, model)
-                debugLog("setup inviato (voce $voiceName)")
-                videoHandler.postDelayed({
-                    if (!isSessionReady) {
-                        debugLog("nessuna risposta dal server dopo 12s")
-                        updateStatus("Il server non risponde: guarda il riquadro qui sopra")
-                    }
-                }, 12000L)
+                try {
+                    isConnected = true
+                    isSessionStarting = false
+                    updateStatus("Configuro ${model.removePrefix("models/")}...")
+                    debugLog("connessione aperta ($apiVersion)")
+                    sendInitialSetup(ws, model, minimalSetup)
+                    videoHandler.postDelayed({
+                        if (isSessionReady) return@postDelayed
+                        setupAttempt++
+                        when (setupAttempt) {
+                            1 -> {
+                                debugLog("nessuna risposta: riprovo con v1alpha")
+                                closeQuietly(ws)
+                                connectWebSocket(userToken, model, "v1alpha", false)
+                            }
+                            2 -> {
+                                debugLog("nessuna risposta: riprovo con configurazione minima")
+                                closeQuietly(ws)
+                                connectWebSocket(userToken, model, "v1alpha", true)
+                            }
+                            else -> {
+                                debugLog("nessuna risposta nemmeno con la configurazione minima")
+                                updateStatus("Il server non risponde: guarda il riquadro")
+                            }
+                        }
+                    }, 10000L)
+                } catch (t: Throwable) {
+                    debugLog("errore all'apertura: ${t.message}")
+                    updateStatus("Errore avvio sessione: ${t.message}")
+                }
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                if (text.contains("inlineData")) {
-                    if (!isSessionReady) debugLog("server: audio (${text.length} caratteri)")
-                } else {
-                    debugLog("server: " + text.take(400))
+                logServerMessage(text)
+                try {
+                    handleServerMessage(text)
+                } catch (t: Throwable) {
+                    debugLog("errore lettura risposta: ${t.message}")
                 }
+            }
+
+            override fun onMessage(ws: WebSocket, bytes: ByteString) {
+                val text = bytes.utf8()
+                logServerMessage(text)
                 try {
                     handleServerMessage(text)
                 } catch (t: Throwable) {
@@ -396,6 +425,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                if (ws !== webSocket) return
                 isConnected = false
                 isRecording = false
                 isSessionReady = false
@@ -413,6 +443,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                if (ws !== webSocket) return
                 isConnected = false
                 isRecording = false
                 isSessionReady = false
@@ -423,6 +454,22 @@ class MainActivity : AppCompatActivity() {
                 maybeResumeWake()
             }
         })
+    }
+
+    private fun closeQuietly(ws: WebSocket) {
+        try {
+            ws.close(1000, "retry")
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+    }
+
+    private fun logServerMessage(text: String) {
+        if (text.contains("inlineData")) {
+            if (!isSessionReady) debugLog("server: audio (${text.length} caratteri)")
+        } else {
+            debugLog("server: " + text.take(400))
+        }
     }
 
     private fun stopSession() {
@@ -436,10 +483,10 @@ class MainActivity : AppCompatActivity() {
         updateStatus("Sessione terminata")
         maybeResumeWake()
     }
-    private fun sendInitialSetup(ws: WebSocket, model: String) {
-        val setupJson = JSONObject().apply {
-            put("setup", JSONObject().apply {
-                put("model", model)
+    private fun sendInitialSetup(ws: WebSocket, model: String, minimal: Boolean = false) {
+        val setup = JSONObject().apply {
+            put("model", model)
+            if (!minimal) {
                 put("inputAudioTranscription", JSONObject())
                 put("outputAudioTranscription", JSONObject())
                 put("generationConfig", JSONObject().apply {
@@ -460,9 +507,16 @@ class MainActivity : AppCompatActivity() {
                         put("text", "Sei HiBuddy, un assistente personale italiano conciso, amichevole e utile. Rispondi sempre in italiano a voce.")
                     }))
                 })
-            })
+            } else {
+                put("generationConfig", JSONObject().apply {
+                    put("responseModalities", JSONArray().put("AUDIO"))
+                })
+            }
         }
-        ws.send(setupJson.toString())
+        val payload = JSONObject().put("setup", setup)
+        debugLog("setup: " + payload.toString().take(220))
+        val sent = ws.send(payload.toString())
+        debugLog(if (sent) "setup inviato (voce $voiceName)" else "INVIO SETUP FALLITO")
     }
 
     private fun startAudioStreaming() {
