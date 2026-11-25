@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
@@ -19,6 +20,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Base64
+import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -94,7 +96,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Security.insertProviderAt(Conscrypt.newProvider(), 1)
+        installCrashLogger()
+        try {
+            initUi()
+            showLastCrashIfAny()
+        } catch (t: Throwable) {
+            showFatalError(t)
+        }
+    }
 
+    private fun initUi() {
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
         etApiKey = findViewById(R.id.etApiKey)
@@ -105,13 +116,19 @@ class MainActivity : AppCompatActivity() {
         cbWake = findViewById(R.id.cbWake)
         btnUpdate = findViewById(R.id.btnUpdate)
 
+        val versionLabel = try {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        } catch (e: Exception) {
+            "?"
+        }
+
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
         val savedKey = prefs.getString(PREF_KEY_NAME, "") ?: ""
         if (savedKey.isNotEmpty()) {
             etApiKey.setText(savedKey)
-            updateStatus("Pronto (Chiave salvata)")
+            updateStatus("Pronto v$versionLabel (chiave salvata)")
         } else {
-            updateStatus("Inserisci e salva la tua API Key in alto")
+            updateStatus("Inserisci e salva la tua API Key in alto (v$versionLabel)")
         }
 
         findViewById<Button>(R.id.btnSaveKey).setOnClickListener {
@@ -509,6 +526,59 @@ class MainActivity : AppCompatActivity() {
                 camera = null
             }
         })
+    }
+
+    private fun installCrashLogger() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                File(filesDir, "last_crash.txt").writeText(Log.getStackTraceString(throwable))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+
+    private fun showLastCrashIfAny() {
+        val file = File(filesDir, "last_crash.txt")
+        if (!file.exists()) return
+        val text = try {
+            file.readText()
+        } catch (e: Exception) {
+            ""
+        }
+        file.delete()
+        if (text.isBlank()) return
+        val view = TextView(this).apply {
+            this.text = "Ultimo errore registrato:\n\n$text"
+            textSize = 11f
+            setTextIsSelectable(true)
+            setPadding(24, 24, 24, 24)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("HiBuddy ha avuto un problema")
+            .setView(ScrollView(this).apply { addView(view) })
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun showFatalError(t: Throwable) {
+        val message = Log.getStackTraceString(t)
+        try {
+            File(filesDir, "last_crash.txt").writeText(message)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        val view = TextView(this).apply {
+            this.text = "Errore all'avvio di HiBuddy:\n\n$message"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.BLACK)
+            textSize = 11f
+            setTextIsSelectable(true)
+            setPadding(24, 24, 24, 24)
+        }
+        setContentView(view)
     }
 
     private fun updateStatus(text: String) {
