@@ -14,6 +14,7 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
@@ -87,6 +88,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spVoice: Spinner
     private var voiceName = "Aoede"
     private lateinit var cbWake: CheckBox
+    private lateinit var screenChat: LinearLayout
+    private lateinit var screenCamera: LinearLayout
+    private lateinit var screenSettings: LinearLayout
+    private lateinit var btnOpenCamera: Button
+    private lateinit var btnOpenSettings: Button
+    private lateinit var btnCloseCamera: Button
+    private lateinit var btnCloseSettings: Button
+    @Volatile
+    private var cameraVisible = false
     private lateinit var btnNotes: Button
     private lateinit var btnUpdate: Button
     private var camera: Camera? = null
@@ -200,6 +210,13 @@ class MainActivity : AppCompatActivity() {
         etMessage = findViewById(R.id.etMessage)
         spVoice = findViewById(R.id.spVoice)
         cbWake = findViewById(R.id.cbWake)
+        screenChat = findViewById(R.id.screenChat)
+        screenCamera = findViewById(R.id.screenCamera)
+        screenSettings = findViewById(R.id.screenSettings)
+        btnOpenCamera = findViewById(R.id.btnOpenCamera)
+        btnOpenSettings = findViewById(R.id.btnOpenSettings)
+        btnCloseCamera = findViewById(R.id.btnCloseCamera)
+        btnCloseSettings = findViewById(R.id.btnCloseSettings)
         btnNotes = findViewById(R.id.btnNotes)
         btnUpdate = findViewById(R.id.btnUpdate)
 
@@ -279,6 +296,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        btnOpenCamera.setOnClickListener { showSection(screenCamera) }
+        btnCloseCamera.setOnClickListener { showSection(screenChat) }
+        btnOpenSettings.setOnClickListener { showSection(screenSettings) }
+        btnCloseSettings.setOnClickListener { showSection(screenChat) }
         btnNotes.setOnClickListener { showNotes() }
 
         btnUpdate.setOnClickListener { downloadAndInstallUpdate() }
@@ -722,7 +743,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendCameraFrame() {
         val jpegData = lastFrameJpeg ?: return
-        if (!isConnected || !isSessionReady) return
+        if (!isConnected || !isSessionReady || !cameraVisible) return
 
         val base64Img = Base64.encodeToString(jpegData, Base64.NO_WRAP)
         val msg = JSONObject().apply {
@@ -1059,6 +1080,15 @@ class MainActivity : AppCompatActivity() {
         setContentView(view)
     }
 
+    private fun showSection(section: LinearLayout) {
+        screenChat.visibility = if (section === screenChat) View.VISIBLE else View.GONE
+        screenCamera.visibility = if (section === screenCamera) View.VISIBLE else View.GONE
+        screenSettings.visibility = if (section === screenSettings) View.VISIBLE else View.GONE
+        cameraVisible = section === screenCamera
+        videoHandler.removeCallbacks(videoRunnable)
+        if (cameraVisible && isConnected) videoHandler.post(videoRunnable)
+    }
+
     private fun updateStatus(text: String) {
         if (!::statusText.isInitialized) return
         runOnUiThread {
@@ -1390,6 +1420,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun copyApkToDownloads(apk: File): File? {
+        return try {
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!dir.exists()) dir.mkdirs()
+            val target = File(dir, "HiBuddy-update.apk")
+            apk.inputStream().use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            target
+        } catch (t: Throwable) {
+            debugLog("copia in Download fallita: ${t.message}")
+            null
+        }
+    }
+
     private fun openReleasePage(version: Int) {
         updateStatus("Scarico la versione $version dal browser")
         try {
@@ -1428,10 +1474,21 @@ class MainActivity : AppCompatActivity() {
             return
         }
         try {
-            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apk)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apk)
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            } else {
+                // Android 5 and 6 hand the file to the installer as a plain path,
+                // so it must be copied where the installer is allowed to read it.
+                val shared = copyApkToDownloads(apk)
+                    ?: throw IllegalStateException("memoria esterna non disponibile")
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(Uri.fromFile(shared), "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
             }
             startActivity(intent)
             updateStatus("Completa l'installazione dalla finestra di Android")

@@ -7,99 +7,220 @@
     android:background="#121212">
 
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingBottom="8dp">
-
-        <EditText
-            android:id="@+id/etApiKey"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="Incolla API Key Gemini..."
-            android:textColor="#FFFFFF"
-            android:textColorHint="#888888"
-            android:inputType="textPassword"
-            android:singleLine="true" />
-
-        <Button
-            android:id="@+id/btnSaveKey"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Salva" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingBottom="8dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Voce:"
-            android:textColor="#FFFFFF"
-            android:paddingEnd="8dp" />
-
-        <Spinner
-            android:id="@+id/spVoice"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="#303030"
-            android:popupBackground="#303030" />
-    </LinearLayout>
-
-    <SurfaceView
-        android:id="@+id/cameraPreview"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
-
-    <ScrollView
-        android:id="@+id/transcriptScroll"
+        android:id="@+id/screenChat"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="8dp"
-        android:background="#1E1E1E">
+        android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvTranscript"
+        <ScrollView
+            android:id="@+id/transcriptScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="#1E1E1E">
+
+            <TextView
+                android:id="@+id/tvTranscript"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:textColor="#DDDDDD"
+                android:textSize="14sp"
+                android:text="" />
+        </ScrollView>
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:padding="8dp"
-            android:textColor="#DDDDDD"
-            android:textSize="14sp"
-            android:text="" />
-    </ScrollView>
+            android:orientation="horizontal"
+            android:paddingTop="8dp">
+
+            <EditText
+                android:id="@+id/etMessage"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Scrivi un messaggio..."
+                android:textColor="#FFFFFF"
+                android:textColorHint="#888888"
+                android:inputType="textCapSentences"
+                android:imeOptions="actionSend"
+                android:maxLines="3" />
+
+            <Button
+                android:id="@+id/btnSendText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Invia" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnConnect"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:text="Parla con AI" />
+
+            <Button
+                android:id="@+id/btnNotes"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Note" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <CheckBox
+                android:id="@+id/cbWake"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Ascolta &quot;HiBuddy&quot;"
+                android:textColor="#DDDDDD" />
+
+            <Button
+                android:id="@+id/btnUpdate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Aggiorna"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnOpenCamera"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Fotocamera" />
+
+            <Button
+                android:id="@+id/btnOpenSettings"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Impostazioni" />
+        </LinearLayout>
+    </LinearLayout>
 
     <LinearLayout
+        android:id="@+id/screenCamera"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingTop="8dp">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:visibility="gone">
 
-        <EditText
-            android:id="@+id/etMessage"
-            android:layout_width="0dp"
+        <SurfaceView
+            android:id="@+id/cameraPreview"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="Scrivi un messaggio..."
+            android:orientation="horizontal"
+            android:paddingTop="8dp">
+
+            <Button
+                android:id="@+id/btnSendFrame"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Invia Foto" />
+
+            <Button
+                android:id="@+id/btnCloseCamera"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Chiudi" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/screenSettings"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Chiave API Gemini"
             android:textColor="#FFFFFF"
-            android:textColorHint="#888888"
-            android:inputType="textCapSentences"
-            android:imeOptions="actionSend"
-            android:maxLines="3" />
+            android:paddingBottom="4dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingBottom="16dp">
+
+            <EditText
+                android:id="@+id/etApiKey"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Incolla API Key Gemini..."
+                android:textColor="#FFFFFF"
+                android:textColorHint="#888888"
+                android:inputType="textPassword"
+                android:singleLine="true" />
+
+            <Button
+                android:id="@+id/btnSaveKey"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Salva" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Voce"
+            android:textColor="#FFFFFF"
+            android:paddingBottom="4dp" />
+
+        <Spinner
+            android:id="@+id/spVoice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#303030"
+            android:popupBackground="#303030" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="La voce scelta vale dalla sessione successiva."
+            android:textColor="#AAAAAA"
+            android:textSize="12sp"
+            android:paddingTop="8dp"
+            android:paddingBottom="16dp" />
 
         <Button
-            android:id="@+id/btnSendText"
-            android:layout_width="wrap_content"
+            android:id="@+id/btnCloseSettings"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Invia" />
+            android:text="Chiudi" />
     </LinearLayout>
 
     <TextView
@@ -110,52 +231,4 @@
         android:textColor="#FFFFFF"
         android:padding="10dp"
         android:gravity="center" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/btnConnect"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Parla con AI" />
-
-        <Button
-            android:id="@+id/btnSendFrame"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Invia Foto" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
-
-        <CheckBox
-            android:id="@+id/cbWake"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Ascolta &quot;HiBuddy&quot;"
-            android:textColor="#DDDDDD" />
-
-        <Button
-            android:id="@+id/btnNotes"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Note" />
-
-        <Button
-            android:id="@+id/btnUpdate"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Aggiorna"
-            android:visibility="gone" />
-    </LinearLayout>
 </LinearLayout>
