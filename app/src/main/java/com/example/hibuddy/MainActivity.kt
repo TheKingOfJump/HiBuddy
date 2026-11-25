@@ -28,6 +28,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -35,12 +36,10 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import okhttp3.*
-import org.conscrypt.Conscrypt
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.security.Security
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -95,14 +94,56 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Security.insertProviderAt(Conscrypt.newProvider(), 1)
+        val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+        val previousStage = prefs.getString("last_stage", null)
+        val previousFailed = prefs.getBoolean("start_failed", false)
+        markStart("inizio")
         installCrashLogger()
+        if (previousFailed) {
+            showSafeMode(previousStage ?: "sconosciuto")
+            return
+        }
         try {
             initUi()
             showLastCrashIfAny()
+            markStart("avvio completato")
+            prefs.edit().putBoolean("start_failed", false).commit()
         } catch (t: Throwable) {
+            prefs.edit().putBoolean("start_failed", true).commit()
             showFatalError(t)
         }
+    }
+
+    private fun markStart(stage: String) {
+        getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+            .edit().putString("last_stage", stage).commit()
+    }
+
+    private fun showSafeMode(stage: String) {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 32, 32, 32)
+        }
+        container.addView(TextView(this).apply {
+            text = "L'avvio precedente si e' interrotto durante: $stage\n\n" +
+                "L'app e' partita in modalita' sicura, senza fotocamera e senza controllo aggiornamenti. " +
+                "Premi il pulsante per riprovare l'avvio normale."
+            setTextColor(Color.WHITE)
+            textSize = 14f
+        })
+        container.addView(Button(this).apply {
+            text = "Riprova avvio normale"
+            setOnClickListener {
+                getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+                    .edit().putBoolean("start_failed", false).commit()
+                recreate()
+            }
+        })
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.BLACK)
+            addView(container)
+        }
+        setContentView(scroll)
     }
 
     private fun initUi() {
@@ -118,7 +159,7 @@ class MainActivity : AppCompatActivity() {
 
         val versionLabel = try {
             packageManager.getPackageInfo(packageName, 0).versionName
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             "?"
         }
 
@@ -230,7 +271,7 @@ class MainActivity : AppCompatActivity() {
     private fun resolveLiveModel(token: String): String {
         val liveModels = try {
             fetchLiveModels(token)
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             emptyList()
         }
         if (liveModels.isEmpty() || MODEL in liveModels) return MODEL
@@ -395,8 +436,8 @@ class MainActivity : AppCompatActivity() {
             try {
                 recorder.stop()
                 recorder.release()
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (t: Throwable) {
+                t.printStackTrace()
             }
         }
     }
@@ -449,8 +490,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
     }
 
@@ -513,8 +554,8 @@ class MainActivity : AppCompatActivity() {
                         lastFrameJpeg = out.toByteArray()
                     }
                     camera?.startPreview()
-                } catch (e: Exception) {
-                    updateStatus("Errore fotocamera: ${e.message}")
+                } catch (t: Throwable) {
+                    updateStatus("Errore fotocamera: ${t.message}")
                 }
             }
 
@@ -533,8 +574,8 @@ class MainActivity : AppCompatActivity() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 File(filesDir, "last_crash.txt").writeText(Log.getStackTraceString(throwable))
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (t: Throwable) {
+                t.printStackTrace()
             }
             previous?.uncaughtException(thread, throwable)
         }
@@ -545,7 +586,7 @@ class MainActivity : AppCompatActivity() {
         if (!file.exists()) return
         val text = try {
             file.readText()
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             ""
         }
         file.delete()
@@ -567,8 +608,8 @@ class MainActivity : AppCompatActivity() {
         val message = Log.getStackTraceString(t)
         try {
             File(filesDir, "last_crash.txt").writeText(message)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
         val view = TextView(this).apply {
             this.text = "Errore all'avvio di HiBuddy:\n\n$message"
@@ -582,6 +623,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus(text: String) {
+        if (!::statusText.isInitialized) return
         runOnUiThread {
             statusText.text = text
         }
@@ -728,8 +770,8 @@ class MainActivity : AppCompatActivity() {
             val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 70)
             tone.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
             Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 400L)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
     }
 
@@ -757,8 +799,8 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (t: Throwable) {
+                t.printStackTrace()
             }
         }
     }
@@ -799,8 +841,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 runOnUiThread { installApk(apk) }
-            } catch (e: Exception) {
-                updateStatus("Errore aggiornamento: ${e.message}")
+            } catch (t: Throwable) {
+                updateStatus("Errore aggiornamento: ${t.message}")
                 runOnUiThread { btnUpdate.isEnabled = true }
             }
         }
@@ -826,8 +868,8 @@ class MainActivity : AppCompatActivity() {
             }
             startActivity(intent)
             updateStatus("Completa l'installazione dalla finestra di Android")
-        } catch (e: Exception) {
-            updateStatus("Impossibile avviare l'installazione: ${e.message}")
+        } catch (t: Throwable) {
+            updateStatus("Impossibile avviare l'installazione: ${t.message}")
         }
     }
 
