@@ -48,6 +48,9 @@ jobs:
         sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" app/build.gradle
         grep -E "versionCode|versionName" app/build.gradle
 
+    - name: Controlla compatibilita Android
+      run: gradle lintDebug
+
     - name: Compila APK
       run: gradle assembleDebug
 
