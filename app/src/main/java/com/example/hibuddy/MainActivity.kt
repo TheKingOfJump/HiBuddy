@@ -280,7 +280,14 @@ class MainActivity : AppCompatActivity() {
 
         btnNotes.setOnClickListener { showNotes() }
 
-        btnUpdate.setOnClickListener { downloadAndInstallUpdate() }
+        btnUpdate.setOnClickListener {
+            val version = latestVersionCode ?: return@setOnClickListener
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                openReleasePage(version)
+            } else {
+                downloadAndInstallUpdate()
+            }
+        }
 
         checkForUpdate()
     }
@@ -1330,23 +1337,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openReleasePage(version: Int) {
+        updateStatus("Scarico la versione $version dal browser")
+        try {
+            startActivity(
+                Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("https://github.com/$UPDATE_REPO/releases/tag/v$version")
+                )
+            )
+        } catch (t: Throwable) {
+            updateStatus("Impossibile aprire il browser: ${t.message}")
+        }
+    }
+
     private fun offerBrowserDownload(version: Int, reason: String) {
         runOnUiThread {
             android.app.AlertDialog.Builder(this)
                 .setTitle("Download automatico non riuscito")
                 .setMessage("$reason\n\nVuoi aprire la pagina di download nel browser?")
-                .setPositiveButton("Apri browser") { _, _ ->
-                    try {
-                        startActivity(
-                            Intent(
-                                Intent.ACTION_VIEW,
-                                Uri.parse("https://github.com/$UPDATE_REPO/releases/tag/v$version")
-                            )
-                        )
-                    } catch (t: Throwable) {
-                        updateStatus("Impossibile aprire il browser: ${t.message}")
-                    }
-                }
+                .setPositiveButton("Apri browser") { _, _ -> openReleasePage(version) }
                 .setNegativeButton("Annulla", null)
                 .show()
         }
