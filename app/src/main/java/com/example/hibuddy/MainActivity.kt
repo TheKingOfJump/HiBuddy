@@ -96,6 +96,10 @@ class MainActivity : AppCompatActivity() {
     private var setupAttempt = 0
     @Volatile
     private var lastAudioChunkAt = 0L
+    @Volatile
+    private var playbackRunning = false
+    private val playbackQueue = java.util.concurrent.LinkedBlockingQueue<String>()
+    private var lastFrameEncodedAt = 0L
 
     private val INPUT_SAMPLE_RATE = 16000
     private val OUTPUT_SAMPLE_RATE = 24000
@@ -484,6 +488,12 @@ class MainActivity : AppCompatActivity() {
         videoHandler.removeCallbacks(videoRunnable)
         webSocket?.close(1000, "Chiusura utente")
         webSocket = null
+        playbackRunning = false
+        playbackQueue.clear()
+        audioTrack?.pause()
+        audioTrack?.flush()
+        audioTrack?.release()
+        audioTrack = null
         updateStatus("Sessione terminata")
         maybeResumeWake()
     }
@@ -616,6 +626,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (serverContent.optBoolean("interrupted", false)) {
+                playbackQueue.clear()
                 audioTrack?.pause()
                 audioTrack?.flush()
                 audioTrack?.play()
@@ -631,10 +642,9 @@ class MainActivity : AppCompatActivity() {
                 if (inlineData != null) {
                     val mimeType = inlineData.optString("mimeType")
                     if (mimeType.startsWith("audio/pcm")) {
-                        val audioBytes = Base64.decode(inlineData.getString("data"), Base64.DEFAULT)
                         lastAudioChunkAt = SystemClock.elapsedRealtime()
-                        val written = audioTrack?.write(audioBytes, 0, audioBytes.size) ?: -1
-                        if (written < 0) debugLog("errore scrittura audio: $written")
+                        if (playbackQueue.size > 400) playbackQueue.clear()
+                        playbackQueue.offer(inlineData.getString("data"))
                     }
                 }
             }
@@ -669,7 +679,7 @@ class MainActivity : AppCompatActivity() {
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
-            val bufferSize = maxOf(if (minBuffer > 0) minBuffer * 4 else 0, OUTPUT_SAMPLE_RATE)
+            val bufferSize = maxOf(if (minBuffer > 0) minBuffer * 4 else 0, OUTPUT_SAMPLE_RATE * 2)
             audioTrack = AudioTrack(
                 AudioManager.STREAM_MUSIC,
                 OUTPUT_SAMPLE_RATE,
@@ -679,9 +689,32 @@ class MainActivity : AppCompatActivity() {
                 AudioTrack.MODE_STREAM
             )
             audioTrack?.play()
+            startPlaybackThread()
         } catch (t: Throwable) {
             audioTrack = null
             updateStatus("Audio in uscita non disponibile: ${t.message}")
+        }
+    }
+
+    private fun startPlaybackThread() {
+        if (playbackRunning) return
+        playbackRunning = true
+        thread {
+            while (playbackRunning) {
+                val data = try {
+                    playbackQueue.poll(300, TimeUnit.MILLISECONDS)
+                } catch (t: Throwable) {
+                    null
+                } ?: continue
+                val track = audioTrack ?: continue
+                try {
+                    val bytes = Base64.decode(data, Base64.DEFAULT)
+                    val written = track.write(bytes, 0, bytes.size)
+                    if (written < 0) debugLog("errore scrittura audio: $written")
+                } catch (t: Throwable) {
+                    t.printStackTrace()
+                }
+            }
         }
     }
 
@@ -694,12 +727,18 @@ class MainActivity : AppCompatActivity() {
                     camera?.setDisplayOrientation(90)
                     camera?.setPreviewDisplay(holder)
                     camera?.setPreviewCallback { data, cam ->
-                        val parameters = cam.parameters
-                        val size = parameters.previewSize
-                        val yuv = YuvImage(data, ImageFormat.NV21, size.width, size.height, null)
-                        val out = ByteArrayOutputStream()
-                        yuv.compressToJpeg(Rect(0, 0, size.width, size.height), 60, out)
-                        lastFrameJpeg = out.toByteArray()
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastFrameEncodedAt < 900L) return@setPreviewCallback
+                        lastFrameEncodedAt = now
+                        try {
+                            val size = cam.parameters.previewSize
+                            val yuv = YuvImage(data, ImageFormat.NV21, size.width, size.height, null)
+                            val out = ByteArrayOutputStream()
+                            yuv.compressToJpeg(Rect(0, 0, size.width, size.height), 55, out)
+                            lastFrameJpeg = out.toByteArray()
+                        } catch (t: Throwable) {
+                            t.printStackTrace()
+                        }
                     }
                     camera?.startPreview()
                 } catch (t: Throwable) {
