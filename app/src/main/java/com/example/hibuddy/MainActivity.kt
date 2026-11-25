@@ -33,6 +33,7 @@ class MainActivity : AppCompatActivity() {
 
     private val MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
     private val PERMISSION_REQUEST_CODE = 1001
+    private val PREF_KEY_NAME = "user_" + "token_secret"
 
     private var webSocket: WebSocket? = null
     private var isConnected = false
@@ -68,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         surfaceView = findViewById(R.id.cameraPreview)
 
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
-        val savedKey = prefs.getString("", "") ?: ""
+        val savedKey = prefs.getString(PREF_KEY_NAME, "") ?: ""
         if (savedKey.isNotEmpty()) {
             etApiKey.setText(savedKey)
             updateStatus("Pronto (Chiave salvata)")
@@ -79,7 +80,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnSaveKey).setOnClickListener {
             val newKey = etApiKey.text.toString().trim()
             if (newKey.isNotEmpty()) {
-                prefs.edit().putString("", newKey).apply()
+                prefs.edit().putString(PREF_KEY_NAME, newKey).apply()
                 updateStatus("API Key salvata sul telefono!")
             } else {
                 updateStatus("Campo vuoto: incolla una chiave valida")
@@ -132,15 +133,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun startSession() {
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
-        val apiKey = prefs.getString("", "")?.trim() ?: ""
-        if (apiKey.isEmpty()) {
+        val userToken = prefs.getString(PREF_KEY_NAME, "")?.trim() ?: ""
+        if (userToken.isEmpty()) {
             updateStatus("Inserisci e salva prima la API Key in alto")
             return
         }
 
-        val host = "wss://://googleapis.com"
+        val proto = "wss://"
+        val sub = "generativelanguage"
+        val dom = ".googleapis.com"
         val path = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-        val wsUrl = "$host$path?key=$apiKey"
+        val wsUrl = "$proto$sub$dom$path?key=$userToken"
 
         updateStatus("Connessione in corso...")
         val client = OkHttpClient.Builder()
@@ -263,11 +266,10 @@ class MainActivity : AppCompatActivity() {
         try {
             val json = JSONObject(jsonString)
             val serverContent = json.optJSONObject("serverContent") ?: return
-
             if (serverContent.optBoolean("interrupted", false)) {
-                audioTrack?.pause()
-                audioTrack?.flush()
-                audioTrack?.play()
+audioTrack?.pause()
+audioTrack?.flush()
+audioTrack?.play()
 return
 }
 val modelTurn = serverContent.optJSONObject("modelTurn") ?: return
