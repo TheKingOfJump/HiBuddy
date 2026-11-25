@@ -68,7 +68,7 @@ class MainActivity : AppCompatActivity() {
         surfaceView = findViewById(R.id.cameraPreview)
 
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
-        val savedKey = prefs.getString("api_key", "") ?: ""
+        val savedKey = prefs.getString("", "") ?: ""
         if (savedKey.isNotEmpty()) {
             etApiKey.setText(savedKey)
             updateStatus("Pronto (Chiave salvata)")
@@ -79,7 +79,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnSaveKey).setOnClickListener {
             val newKey = etApiKey.text.toString().trim()
             if (newKey.isNotEmpty()) {
-                prefs.edit().putString("api_key", newKey).apply()
+                prefs.edit().putString("", newKey).apply()
                 updateStatus("API Key salvata sul telefono!")
             } else {
                 updateStatus("Campo vuoto: incolla una chiave valida")
@@ -132,7 +132,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startSession() {
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
-        val apiKey = prefs.getString("api_key", "")?.trim() ?: ""
+        val apiKey = prefs.getString("", "")?.trim() ?: ""
         if (apiKey.isEmpty()) {
             updateStatus("Inserisci e salva prima la API Key in alto")
             return
