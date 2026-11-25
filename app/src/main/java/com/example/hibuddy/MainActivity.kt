@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity() {
     private val UPDATE_REPO = "TheKingOfJump/HiBuddy"
     private val WAKE_PHRASES = listOf("hibuddy", "haibuddy", "heibuddy", "aibuddy")
     private val PREF_VOICE = "voice_name"
+    private val PREF_LOOSE_UPDATE = "update_loose_check"
     private val VOICES = listOf(
         "Aoede", "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus",
         "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
@@ -1345,12 +1346,17 @@ class MainActivity : AppCompatActivity() {
             try {
                 val dir = File(cacheDir, "updates").apply { mkdirs() }
                 val apk = File(dir, "hibuddy-$version.apk")
+                val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+                val looseFirst = prefs.getBoolean(PREF_LOOSE_UPDATE, false)
                 var error: String? = null
-                for (client in listOf(buildUpdateClient(), buildLooseUpdateClient())) {
+                var usedLoose = false
+                for (loose in if (looseFirst) listOf(true, false) else listOf(false, true)) {
                     try {
+                        val client = if (loose) buildLooseUpdateClient() else buildUpdateClient()
                         downloadApk(client, version, apk)
                         if (apk.length() > 1_000_000L) {
                             error = null
+                            usedLoose = loose
                             break
                         }
                         error = "file incompleto (${apk.length()} byte)"
@@ -1358,6 +1364,9 @@ class MainActivity : AppCompatActivity() {
                         error = "${t.javaClass.simpleName}: ${t.message ?: "nessun dettaglio"}"
                         debugLog("download fallito: $error")
                     }
+                }
+                if (error == null) {
+                    prefs.edit().putBoolean(PREF_LOOSE_UPDATE, usedLoose).apply()
                 }
                 if (error != null) {
                     updateStatus("Download non riuscito: $error")
