@@ -31,7 +31,6 @@ import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
-    // Modello aggiornato per Gemini Live API (audio nativo)
     private val MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
     private val PERMISSION_REQUEST_CODE = 1001
 
@@ -49,13 +48,12 @@ class MainActivity : AppCompatActivity() {
     private val OUTPUT_SAMPLE_RATE = 24000
     private var audioTrack: AudioTrack? = null
 
-    // Handler per invio automatico frame video (1 FPS)
     private val videoHandler = Handler(Looper.getMainLooper())
     private val videoRunnable = object : Runnable {
         override fun run() {
             if (isConnected) {
                 sendCameraFrame()
-                videoHandler.postDelayed(this, 1000L) // 1 frame al secondo
+                videoHandler.postDelayed(this, 1000L)
             }
         }
     }
@@ -140,8 +138,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Endpoint WebSocket ufficiale v1beta per Gemini Live API
-        val wsUrl = "wss://://googleapis.com"
+        val host = "wss://://googleapis.com"
+        val path = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        val wsUrl = "$host$path?key=$apiKey"
 
         updateStatus("Connessione in corso...")
         val client = OkHttpClient.Builder()
@@ -155,7 +154,6 @@ class MainActivity : AppCompatActivity() {
                 updateStatus("Connesso! Parla pure...")
                 sendInitialSetup(ws)
                 startAudioStreaming()
-                // Avvia streaming video continuo a 1 FPS
                 videoHandler.post(videoRunnable)
             }
 
@@ -264,12 +262,12 @@ class MainActivity : AppCompatActivity() {
     private fun handleServerMessage(jsonString: String) {
         try {
             val json = JSONObject(jsonString)
-val serverContent = json.optJSONObject("serverContent") ?: return
-// Se l'utente interrompe l'assistente, ferma subito la coda audio
-if (serverContent.optBoolean("interrupted", false)) {
-audioTrack?.pause()
-audioTrack?.flush()
-audioTrack?.play()
+            val serverContent = json.optJSONObject("serverContent") ?: return
+
+            if (serverContent.optBoolean("interrupted", false)) {
+                audioTrack?.pause()
+                audioTrack?.flush()
+                audioTrack?.play()
 return
 }
 val modelTurn = serverContent.optJSONObject("modelTurn") ?: return
