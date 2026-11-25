@@ -280,14 +280,7 @@ class MainActivity : AppCompatActivity() {
 
         btnNotes.setOnClickListener { showNotes() }
 
-        btnUpdate.setOnClickListener {
-            val version = latestVersionCode ?: return@setOnClickListener
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-                openReleasePage(version)
-            } else {
-                downloadAndInstallUpdate()
-            }
-        }
+        btnUpdate.setOnClickListener { downloadAndInstallUpdate() }
 
         checkForUpdate()
     }
@@ -1256,6 +1249,57 @@ class MainActivity : AppCompatActivity() {
         return builder.build()
     }
 
+    // Android 5 rejects the CDN chain for reasons we cannot fix from here, so the
+    // download is retried with a permissive chain check: the APK itself is then
+    // verified against the signature of the installed app before installing it.
+    private fun buildLooseUpdateClient(): OkHttpClient {
+        val trustManager = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }
+        val context = SSLContext.getInstance("TLS")
+        context.init(null, arrayOf(trustManager), null)
+        return OkHttpClient.Builder()
+            .sslSocketFactory(context.socketFactory, trustManager)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .build()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isOurApk(apk: File): Boolean {
+        return try {
+            val archive = packageManager.getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_SIGNATURES)
+                ?: return false
+            if (archive.packageName != packageName) return false
+            val downloaded = archive.signatures ?: return false
+            val installed = packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNATURES).signatures
+                ?: return false
+            downloaded.any { candidate ->
+                installed.any { it.toByteArray().contentEquals(candidate.toByteArray()) }
+            }
+        } catch (t: Throwable) {
+            debugLog("verifica firma fallita: ${t.message}")
+            false
+        }
+    }
+
+    private fun downloadApk(client: OkHttpClient, version: Int, apk: File) {
+        val request = Request.Builder()
+            .url("https://github.com/$UPDATE_REPO/releases/download/v$version/app-debug.apk")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException("il server ha risposto ${response.code}")
+            }
+            val stream = response.body?.byteStream() ?: throw IllegalStateException("risposta vuota")
+            stream.use { input ->
+                apk.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+    }
+
     private fun checkForUpdate() {
         thread {
             try {
@@ -1299,30 +1343,31 @@ class MainActivity : AppCompatActivity() {
         updateStatus("Scarico la versione $version...")
         thread {
             try {
-                val client = buildUpdateClient()
-                val request = Request.Builder()
-                    .url("https://github.com/$UPDATE_REPO/releases/download/v$version/app-debug.apk")
-                    .build()
                 val dir = File(cacheDir, "updates").apply { mkdirs() }
                 val apk = File(dir, "hibuddy-$version.apk")
-                var failure: String? = null
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        failure = "il server ha risposto ${response.code}"
-                        return@use
-                    }
-                    response.body?.byteStream()?.use { input ->
-                        apk.outputStream().use { output -> input.copyTo(output) }
+                var error: String? = null
+                for (client in listOf(buildUpdateClient(), buildLooseUpdateClient())) {
+                    try {
+                        downloadApk(client, version, apk)
+                        if (apk.length() > 1_000_000L) {
+                            error = null
+                            break
+                        }
+                        error = "file incompleto (${apk.length()} byte)"
+                    } catch (t: Throwable) {
+                        error = "${t.javaClass.simpleName}: ${t.message ?: "nessun dettaglio"}"
+                        debugLog("download fallito: $error")
                     }
                 }
-                if (failure != null) {
-                    updateStatus("Download non riuscito: $failure")
-                    offerBrowserDownload(version, failure ?: "")
+                if (error != null) {
+                    updateStatus("Download non riuscito: $error")
+                    offerBrowserDownload(version, error)
                     return@thread
                 }
-                if (apk.length() < 1_000_000L) {
-                    updateStatus("Download incompleto (${apk.length()} byte)")
-                    offerBrowserDownload(version, "il file scaricato e' incompleto")
+                if (!isOurApk(apk)) {
+                    apk.delete()
+                    updateStatus("File scaricato non valido: firma non riconosciuta")
+                    debugLog("firma APK non corrispondente, installazione annullata")
                     return@thread
                 }
                 runOnUiThread { installApk(apk) }
@@ -1330,7 +1375,6 @@ class MainActivity : AppCompatActivity() {
                 val reason = "${t.javaClass.simpleName}: ${t.message ?: "nessun dettaglio"}"
                 updateStatus("Errore aggiornamento: $reason")
                 debugLog("aggiornamento fallito: $reason")
-                offerBrowserDownload(version, reason)
             } finally {
                 runOnUiThread { btnUpdate.isEnabled = true }
             }
