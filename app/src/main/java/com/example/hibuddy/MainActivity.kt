@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private var webSocket: WebSocket? = null
     private var isConnected = false
     private var isRecording = false
+    private var isSessionReady = false
 
     private lateinit var statusText: TextView
     private lateinit var etApiKey: EditText
@@ -154,10 +155,8 @@ class MainActivity : AppCompatActivity() {
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 isConnected = true
-                updateStatus("Connesso! Parla pure...")
+                updateStatus("Connessione stabilita, configuro la sessione...")
                 sendInitialSetup(ws)
-                startAudioStreaming()
-                videoHandler.post(videoRunnable)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -167,6 +166,7 @@ class MainActivity : AppCompatActivity() {
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 isConnected = false
                 isRecording = false
+                isSessionReady = false
                 videoHandler.removeCallbacks(videoRunnable)
                 updateStatus("Errore: ${t.message}")
             }
@@ -174,6 +174,7 @@ class MainActivity : AppCompatActivity() {
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 isConnected = false
                 isRecording = false
+                isSessionReady = false
                 videoHandler.removeCallbacks(videoRunnable)
                 updateStatus("Disconnesso ($reason)")
             }
@@ -183,6 +184,7 @@ class MainActivity : AppCompatActivity() {
     private fun stopSession() {
         isConnected = false
         isRecording = false
+        isSessionReady = false
         videoHandler.removeCallbacks(videoRunnable)
         webSocket?.close(1000, "Chiusura utente")
         webSocket = null
@@ -243,10 +245,10 @@ class MainActivity : AppCompatActivity() {
                     val base64Audio = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP)
                     val msg = JSONObject().apply {
                         put("realtimeInput", JSONObject().apply {
-                            put("mediaChunks", JSONArray().put(JSONObject().apply {
+                            put("audio", JSONObject().apply {
                                 put("mimeType", "audio/pcm;rate=16000")
                                 put("data", base64Audio)
-                            }))
+                            })
                         })
                     }
                     webSocket?.send(msg.toString())
@@ -264,6 +266,21 @@ class MainActivity : AppCompatActivity() {
     private fun handleServerMessage(jsonString: String) {
         try {
             val json = JSONObject(jsonString)
+
+            if (json.has("setupComplete")) {
+                isSessionReady = true
+                updateStatus("Connesso! Parla pure...")
+                startAudioStreaming()
+                videoHandler.post(videoRunnable)
+                return
+            }
+
+            val apiError = json.optJSONObject("error")
+            if (apiError != null) {
+                updateStatus("Errore API: ${apiError.optString("message")}")
+                return
+            }
+
             val serverContent = json.optJSONObject("serverContent") ?: return
 
             if (serverContent.optBoolean("interrupted", false)) {
@@ -294,15 +311,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendCameraFrame() {
         val jpegData = lastFrameJpeg ?: return
-        if (!isConnected) return
+        if (!isConnected || !isSessionReady) return
 
         val base64Img = Base64.encodeToString(jpegData, Base64.NO_WRAP)
         val msg = JSONObject().apply {
             put("realtimeInput", JSONObject().apply {
-                put("mediaChunks", JSONArray().put(JSONObject().apply {
+                put("video", JSONObject().apply {
                     put("mimeType", "image/jpeg")
                     put("data", base64Img)
-                }))
+                })
             })
         }
         webSocket?.send(msg.toString())
