@@ -413,7 +413,8 @@ class MainActivity : AppCompatActivity() {
     private fun startAudioStreaming() {
         isRecording = true
         thread {
-            val bufferSize = AudioRecord.getMinBufferSize(
+            try {
+            val minBuffer = AudioRecord.getMinBufferSize(
                 INPUT_SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
@@ -421,6 +422,7 @@ class MainActivity : AppCompatActivity() {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 return@thread
             }
+            val bufferSize = if (minBuffer > 0) minBuffer else INPUT_SAMPLE_RATE
             val recorder = AudioRecord(
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 INPUT_SAMPLE_RATE,
@@ -452,6 +454,10 @@ class MainActivity : AppCompatActivity() {
                 recorder.release()
             } catch (t: Throwable) {
                 t.printStackTrace()
+            }
+            } catch (t: Throwable) {
+                isRecording = false
+                updateStatus("Errore microfono: ${t.message}")
             }
         }
     }
@@ -525,8 +531,8 @@ class MainActivity : AppCompatActivity() {
         webSocket?.send(msg.toString())
     }
 
-    // AudioTrack.Builder and AudioFormat.Builder only exist from Android 6.0 (API 23),
-    // so use the equivalent constructors that are available from Android 5.0.
+    // AudioTrack.Builder and AudioFormat.Builder only exist from Android 6.0 (API 23);
+    // the plain constructor below works on every supported Android version.
     @Suppress("DEPRECATION")
     private fun setupAudioOutput() {
         try {
@@ -536,20 +542,13 @@ class MainActivity : AppCompatActivity() {
                 AudioFormat.ENCODING_PCM_16BIT
             )
             val bufferSize = if (minBuffer > 0) minBuffer * 2 else OUTPUT_SAMPLE_RATE
-            val attributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
             audioTrack = AudioTrack(
-                attributes,
-                AudioFormat(
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    OUTPUT_SAMPLE_RATE,
-                    AudioFormat.CHANNEL_OUT_MONO
-                ),
+                AudioManager.STREAM_MUSIC,
+                OUTPUT_SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
                 bufferSize,
-                AudioTrack.MODE_STREAM,
-                AudioManager.AUDIO_SESSION_ID_GENERATE
+                AudioTrack.MODE_STREAM
             )
             audioTrack?.play()
         } catch (t: Throwable) {
