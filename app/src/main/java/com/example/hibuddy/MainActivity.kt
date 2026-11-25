@@ -1,12 +1,16 @@
 package com.example.hibuddy
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.Camera
 import android.media.*
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -14,6 +18,8 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import okhttp3.*
 import org.conscrypt.Conscrypt
 import org.json.JSONArray
@@ -25,7 +31,9 @@ import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
-    private val MODEL = "models/gemini-2.0-flash-exp"
+    // Modello aggiornato per Gemini Live API (audio nativo)
+    private val MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+    private val PERMISSION_REQUEST_CODE = 1001
 
     private var webSocket: WebSocket? = null
     private var isConnected = false
@@ -40,6 +48,17 @@ class MainActivity : AppCompatActivity() {
     private val INPUT_SAMPLE_RATE = 16000
     private val OUTPUT_SAMPLE_RATE = 24000
     private var audioTrack: AudioTrack? = null
+
+    // Handler per invio automatico frame video (1 FPS)
+    private val videoHandler = Handler(Looper.getMainLooper())
+    private val videoRunnable = object : Runnable {
+        override fun run() {
+            if (isConnected) {
+                sendCameraFrame()
+                videoHandler.postDelayed(this, 1000L) // 1 frame al secondo
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,10 +88,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        setupCamera()
+        checkAndRequestPermissions()
         setupAudioOutput()
 
         findViewById<Button>(R.id.btnConnect).setOnClickListener {
+            if (!hasRequiredPermissions()) {
+                checkAndRequestPermissions()
+                return@setOnClickListener
+            }
             if (!isConnected) startSession() else stopSession()
         }
 
@@ -81,14 +104,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun hasRequiredPermissions(): Boolean {
+        val mic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val cam = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        return mic && cam
+    }
+
+    private fun checkAndRequestPermissions() {
+        if (!hasRequiredPermissions()) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA),
+                PERMISSION_REQUEST_CODE
+            )
+        } else {
+            setupCamera()
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PERMISSION_REQUEST_CODE && hasRequiredPermissions()) {
+            setupCamera()
+            updateStatus("Permessi concessi! Pronto.")
+        } else {
+            updateStatus("Permessi Microfono/Fotocamera necessari")
+        }
+    }
+
     private fun startSession() {
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
-        val API_KEY = prefs.getString("api_key", "")?.trim() ?: ""
-        if (API_KEY.isEmpty()) {
+        val apiKey = prefs.getString("api_key", "")?.trim() ?: ""
+        if (apiKey.isEmpty()) {
             updateStatus("Inserisci e salva prima la API Key in alto")
             return
         }
 
+        // Endpoint WebSocket ufficiale v1beta per Gemini Live API
         val wsUrl = "wss://://googleapis.com"
 
         updateStatus("Connessione in corso...")
@@ -103,6 +155,8 @@ class MainActivity : AppCompatActivity() {
                 updateStatus("Connesso! Parla pure...")
                 sendInitialSetup(ws)
                 startAudioStreaming()
+                // Avvia streaming video continuo a 1 FPS
+                videoHandler.post(videoRunnable)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -112,15 +166,26 @@ class MainActivity : AppCompatActivity() {
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 isConnected = false
                 isRecording = false
+                videoHandler.removeCallbacks(videoRunnable)
                 updateStatus("Errore: ${t.message}")
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 isConnected = false
                 isRecording = false
-                updateStatus("Disconnesso")
+                videoHandler.removeCallbacks(videoRunnable)
+                updateStatus("Disconnesso ($reason)")
             }
         })
+    }
+
+    private fun stopSession() {
+        isConnected = false
+        isRecording = false
+        videoHandler.removeCallbacks(videoRunnable)
+        webSocket?.close(1000, "Chiusura utente")
+        webSocket = null
+        updateStatus("Sessione terminata")
     }
 
     private fun sendInitialSetup(ws: WebSocket) {
@@ -142,7 +207,7 @@ class MainActivity : AppCompatActivity() {
                 }))
                 put("systemInstruction", JSONObject().apply {
                     put("parts", JSONArray().put(JSONObject().apply {
-                        put("text", "Sei HiBuddy, un assistente personale italiano conciso, chiaro e utile. Rispondi a voce.")
+                        put("text", "Sei HiBuddy, un assistente personale italiano conciso, amichevole e utile. Rispondi sempre in italiano a voce.")
                     }))
                 })
             })
@@ -158,6 +223,9 @@ class MainActivity : AppCompatActivity() {
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                return@thread
+            }
             val recorder = AudioRecord(
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 INPUT_SAMPLE_RATE,
@@ -184,102 +252,119 @@ class MainActivity : AppCompatActivity() {
                     webSocket?.send(msg.toString())
                 }
             }
-            recorder.stop()
-            recorder.release()
+            try {
+                recorder.stop()
+                recorder.release()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
     private fun handleServerMessage(jsonString: String) {
         try {
             val json = JSONObject(jsonString)
-            val serverContent = json.optJSONObject("serverContent") ?: return
-            val modelTurn = serverContent.optJSONObject("modelTurn") ?: return
-            val parts = modelTurn.optJSONArray("parts") ?: return
-
-            for (i in 0 until parts.length()) {
-                val part = parts.getJSONObject(i)
-                val inlineData = part.optJSONObject("inlineData")
-                if (inlineData != null) {
-                    val mimeType = inlineData.optString("mimeType")
-                    if (mimeType.startsWith("audio/pcm")) {
-                        val audioBytes = Base64.decode(inlineData.getString("data"), Base64.DEFAULT)
-                        audioTrack?.write(audioBytes, 0, audioBytes.size)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    private fun sendCameraFrame() {
-        val jpegData = lastFrameJpeg ?: return
-        if (!isConnected) return
-
-        val base64Img = Base64.encodeToString(jpegData, Base64.NO_WRAP)
-        val msg = JSONObject().apply {
-            put("realtimeInput", JSONObject().apply {
-                put("mediaChunks", JSONArray().put(JSONObject().apply {
-                    put("mimeType", "image/jpeg")
-                    put("data", base64Img)
-                }))
-            })
-        }
-        webSocket?.send(msg.toString())
-        updateStatus("Immagine inviata all'AI")
-    }
-
-    private fun setupAudioOutput() {
-        val minBuf = AudioTrack.getMinBufferSize(
-            OUTPUT_SAMPLE_RATE,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-        audioTrack = AudioTrack(
-            AudioManager.STREAM_MUSIC,
-            OUTPUT_SAMPLE_RATE,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBuf,
-            AudioTrack.MODE_STREAM
-        )
-        audioTrack?.play()
-    }
-
-    private fun setupCamera() {
-        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                try {
-                    camera = Camera.open()
-                    camera?.setDisplayOrientation(90)
-                    camera?.setPreviewDisplay(holder)
-                    camera?.setPreviewCallback { data, cam ->
-                        val params = cam.parameters
-                        val yuv = YuvImage(data, ImageFormat.NV21, params.previewSize.width, params.previewSize.height, null)
-                        val out = ByteArrayOutputStream()
-                        yuv.compressToJpeg(Rect(0, 0, params.previewSize.width, params.previewSize.height), 50, out)
-                        lastFrameJpeg = out.toByteArray()
-                    }
-                    camera?.startPreview()
-                } catch (e: Exception) {                    updateStatus("Errore camera: ${e.message}")
-                }
-            }
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                camera?.release()
-                camera = null
-            }
-        })
-    }
-
-    private fun stopSession() {
-        isRecording = false
-        webSocket?.close(1000, "Chiusura utente")
-        isConnected = false
-    }
-
-    private fun updateStatus(text: String) {
-        runOnUiThread { statusText.text = text }
-    }
+val serverContent = json.optJSONObject("serverContent") ?: return
+// Se l'utente interrompe l'assistente, ferma subito la coda audio
+if (serverContent.optBoolean("interrupted", false)) {
+audioTrack?.pause()
+audioTrack?.flush()
+audioTrack?.play()
+return
 }
-
+val modelTurn = serverContent.optJSONObject("modelTurn") ?: return
+val parts = modelTurn.optJSONArray("parts") ?: return
+for (i in 0 until parts.length()) {
+val part = parts.getJSONObject(i)
+val inlineData = part.optJSONObject("inlineData")
+if (inlineData != null) {
+val mimeType = inlineData.optString("mimeType")
+if (mimeType.startsWith("audio/pcm")) {
+val audioBytes = Base64.decode(inlineData.getString("data"), Base64.DEFAULT)
+audioTrack?.write(audioBytes, 0, audioBytes.size)
+}
+}
+}
+} catch (e: Exception) {
+e.printStackTrace()
+}
+}
+private fun sendCameraFrame() {
+val jpegData = lastFrameJpeg ?: return
+if (!isConnected) return
+val base64Img = Base64.encodeToString(jpegData, Base64.NO_WRAP)
+val msg = JSONObject().apply {
+put("realtimeInput", JSONObject().apply {
+put("mediaChunks", JSONArray().put(JSONObject().apply {
+put("mimeType", "image/jpeg")
+put("data", base64Img)
+}))
+})
+}
+webSocket?.send(msg.toString())
+}
+private fun setupAudioOutput() {
+val minBuffer = AudioTrack.getMinBufferSize(
+OUTPUT_SAMPLE_RATE,
+AudioFormat.CHANNEL_OUT_MONO,
+AudioFormat.ENCODING_PCM_16BIT
+)
+audioTrack = AudioTrack.Builder()
+.setAudioAttributes(
+AudioAttributes.Builder()
+.setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+.setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+.build()
+)
+.setAudioFormat(
+AudioFormat.Builder()
+.setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+.setSampleRate(OUTPUT_SAMPLE_RATE)
+.setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+.build()
+)
+.setBufferSizeInBytes(minBuffer)
+.setTransferMode(AudioTrack.MODE_STREAM)
+.build()
+audioTrack?.play()
+}
+@Suppress("DEPRECATION")
+private fun setupCamera() {
+surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+override fun surfaceCreated(holder: SurfaceHolder) {
+try {
+camera = Camera.open()
+camera?.setDisplayOrientation(90)
+camera?.setPreviewDisplay(holder)
+camera?.setPreviewCallback { data, cam ->
+val parameters = cam.parameters
+val size = parameters.previewSize
+val yuv = YuvImage(data, ImageFormat.NV21, size.width, size.height, null)
+val out = ByteArrayOutputStream()
+yuv.compressToJpeg(Rect(0, 0, size.width, size.height), 60, out)
+lastFrameJpeg = out.toByteArray()
+}
+camera?.startPreview()
+} catch (e: Exception) {
+updateStatus("Errore fotocamera: ${e.message}")
+}
+}
+override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+override fun surfaceDestroyed(holder: SurfaceHolder) {
+camera?.stopPreview()
+camera?.release()
+camera = null
+}
+})
+}
+private fun updateStatus(text: String) {
+runOnUiThread {
+statusText.text = text
+}
+}
+override fun onDestroy() {
+super.onDestroy()
+stopSession()
+audioTrack?.release()
+}
+}
