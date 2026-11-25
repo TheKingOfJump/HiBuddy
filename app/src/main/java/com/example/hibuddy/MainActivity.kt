@@ -44,6 +44,12 @@ import okhttp3.*
 import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.KeyStore
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -973,13 +979,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Android 5.x does not ship ISRG Root X1, which GitHub's download CDN uses,
+    // so downloads failed with CertPathValidatorException on this phone.
+    private fun buildUpdateClient(): OkHttpClient {
+        val builder = OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+        try {
+            val factory = CertificateFactory.getInstance("X.509")
+            val extra = resources.openRawResource(R.raw.isrg_root_x1).use {
+                factory.generateCertificate(it) as X509Certificate
+            }
+            val store = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
+            store.setCertificateEntry("isrg-root-x1", extra)
+            val trustManager = TrustManagerFactory.getInstance("X509")
+                .apply { init(store) }
+                .trustManagers
+                .filterIsInstance<X509TrustManager>()
+                .first()
+            val context = SSLContext.getInstance("TLS")
+            context.init(null, arrayOf(trustManager), null)
+            builder.sslSocketFactory(context.socketFactory, trustManager)
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+        return builder.build()
+    }
+
     private fun checkForUpdate() {
         thread {
             try {
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(10, TimeUnit.SECONDS)
-                    .readTimeout(10, TimeUnit.SECONDS)
-                    .build()
+                val client = buildUpdateClient()
                 val request = Request.Builder()
                     .url("https://api.github.com/repos/$UPDATE_REPO/releases/latest")
                     .header("Accept", "application/vnd.github+json")
@@ -1019,10 +1049,7 @@ class MainActivity : AppCompatActivity() {
         updateStatus("Scarico la versione $version...")
         thread {
             try {
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(30, TimeUnit.SECONDS)
-                    .readTimeout(120, TimeUnit.SECONDS)
-                    .build()
+                val client = buildUpdateClient()
                 val request = Request.Builder()
                     .url("https://github.com/$UPDATE_REPO/releases/download/v$version/app-debug.apk")
                     .build()
