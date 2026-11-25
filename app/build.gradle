@@ -40,7 +40,7 @@ android {
         }
     }
     lint {
-        check 'NewApi'
+        checkOnly += "NewApi"
         abortOnError true
     }
     compileOptions {
