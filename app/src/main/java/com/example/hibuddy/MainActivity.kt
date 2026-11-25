@@ -95,6 +95,12 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+        if (prefs.getInt("last_version", 0) != currentVersionCode()) {
+            prefs.edit()
+                .putInt("last_version", currentVersionCode())
+                .putBoolean("start_failed", false)
+                .commit()
+        }
         val previousStage = prefs.getString("last_stage", null)
         val previousFailed = prefs.getBoolean("start_failed", false)
         markStart("inizio")
@@ -124,12 +130,19 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 32, 32, 32)
         }
+        val crashText = try {
+            File(filesDir, "last_crash.txt").readText()
+        } catch (t: Throwable) {
+            ""
+        }
         container.addView(TextView(this).apply {
             text = "L'avvio precedente si e' interrotto durante: $stage\n\n" +
                 "L'app e' partita in modalita' sicura, senza fotocamera e senza controllo aggiornamenti. " +
-                "Premi il pulsante per riprovare l'avvio normale."
+                "Premi il pulsante per riprovare l'avvio normale.\n\n" +
+                (if (crashText.isBlank()) "" else "Dettaglio:\n$crashText")
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 12f
+            setTextIsSelectable(true)
         })
         container.addView(Button(this).apply {
             text = "Riprova avvio normale"
@@ -258,6 +271,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        if (audioTrack == null) setupAudioOutput()
         isSessionStarting = true
         stopWakeListening()
         clearTranscript()
@@ -511,30 +525,37 @@ class MainActivity : AppCompatActivity() {
         webSocket?.send(msg.toString())
     }
 
+    // AudioTrack.Builder and AudioFormat.Builder only exist from Android 6.0 (API 23),
+    // so use the equivalent constructors that are available from Android 5.0.
+    @Suppress("DEPRECATION")
     private fun setupAudioOutput() {
-        val minBuffer = AudioTrack.getMinBufferSize(
-            OUTPUT_SAMPLE_RATE,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-        audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
+        try {
+            val minBuffer = AudioTrack.getMinBufferSize(
+                OUTPUT_SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
             )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(OUTPUT_SAMPLE_RATE)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
+            val bufferSize = if (minBuffer > 0) minBuffer * 2 else OUTPUT_SAMPLE_RATE
+            val attributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            audioTrack = AudioTrack(
+                attributes,
+                AudioFormat(
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    OUTPUT_SAMPLE_RATE,
+                    AudioFormat.CHANNEL_OUT_MONO
+                ),
+                bufferSize,
+                AudioTrack.MODE_STREAM,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
             )
-            .setBufferSizeInBytes(minBuffer)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        audioTrack?.play()
+            audioTrack?.play()
+        } catch (t: Throwable) {
+            audioTrack = null
+            updateStatus("Audio in uscita non disponibile: ${t.message}")
+        }
     }
 
     @Suppress("DEPRECATION")
