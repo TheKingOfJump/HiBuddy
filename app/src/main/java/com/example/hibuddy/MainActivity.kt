@@ -140,13 +140,62 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        updateStatus("Cerco un modello Live disponibile...")
+        thread {
+            val model = resolveLiveModel(userToken)
+            runOnUiThread { connectWebSocket(userToken, model) }
+        }
+    }
+
+    private fun resolveLiveModel(token: String): String {
+        val liveModels = try {
+            fetchLiveModels(token)
+        } catch (e: Exception) {
+            emptyList()
+        }
+        if (liveModels.isEmpty() || MODEL in liveModels) return MODEL
+        return liveModels.firstOrNull { it.contains("native-audio") }
+            ?: liveModels.firstOrNull {
+                it.contains("-live") && !it.contains("translate") &&
+                    !it.contains("transcribe") && !it.contains("thinking")
+            }
+            ?: liveModels.first()
+    }
+
+    private fun fetchLiveModels(token: String): List<String> {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build()
+        val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$token&pageSize=1000"
+        return client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+            if (!response.isSuccessful) return emptyList()
+            val body = response.body?.string() ?: return emptyList()
+            val models = JSONObject(body).optJSONArray("models") ?: return emptyList()
+            val result = mutableListOf<String>()
+            for (i in 0 until models.length()) {
+                val model = models.getJSONObject(i)
+                val methods = model.optJSONArray("supportedGenerationMethods") ?: continue
+                val name = model.optString("name")
+                if (name.isEmpty()) continue
+                for (j in 0 until methods.length()) {
+                    if (methods.optString(j) == "bidiGenerateContent") {
+                        result.add(name)
+                        break
+                    }
+                }
+            }
+            result
+        }
+    }
+
+    private fun connectWebSocket(userToken: String, model: String) {
         val proto = "wss://"
         val sub = "generativelanguage"
         val dom = ".googleapis.com"
         val path = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
         val wsUrl = "$proto$sub$dom$path?key=$userToken"
 
-        updateStatus("Connessione in corso...")
         val client = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
@@ -155,8 +204,8 @@ class MainActivity : AppCompatActivity() {
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 isConnected = true
-                updateStatus("Connessione stabilita, configuro la sessione...")
-                sendInitialSetup(ws)
+                updateStatus("Configuro ${model.removePrefix("models/")}...")
+                sendInitialSetup(ws, model)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -190,10 +239,10 @@ class MainActivity : AppCompatActivity() {
         webSocket = null
         updateStatus("Sessione terminata")
     }
-    private fun sendInitialSetup(ws: WebSocket) {
+    private fun sendInitialSetup(ws: WebSocket, model: String) {
         val setupJson = JSONObject().apply {
             put("setup", JSONObject().apply {
-                put("model", MODEL)
+                put("model", model)
                 put("generationConfig", JSONObject().apply {
                     put("responseModalities", JSONArray().put("AUDIO"))
                     put("speechConfig", JSONObject().apply {
