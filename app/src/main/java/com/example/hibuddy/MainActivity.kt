@@ -2,29 +2,41 @@ package com.example.hibuddy
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.Camera
 import android.media.*
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.Base64
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import okhttp3.*
 import org.conscrypt.Conscrypt
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.security.Security
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -34,17 +46,34 @@ class MainActivity : AppCompatActivity() {
     private val MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
     private val PERMISSION_REQUEST_CODE = 1001
     private val PREF_KEY_NAME = "user_" + "token_secret"
+    private val UPDATE_REPO = "TheKingOfJump/HiBuddy"
+    private val WAKE_PHRASES = listOf("hibuddy", "haibuddy", "heibuddy", "aibuddy")
 
     private var webSocket: WebSocket? = null
     private var isConnected = false
     private var isRecording = false
     private var isSessionReady = false
+    private var isSessionStarting = false
 
     private lateinit var statusText: TextView
     private lateinit var etApiKey: EditText
     private lateinit var surfaceView: SurfaceView
+    private lateinit var tvTranscript: TextView
+    private lateinit var transcriptScroll: ScrollView
+    private lateinit var cbWake: CheckBox
+    private lateinit var btnUpdate: Button
     private var camera: Camera? = null
     private var lastFrameJpeg: ByteArray? = null
+
+    private val transcript = StringBuilder()
+    private var transcriptSpeaker: String? = null
+
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var wakeMode = false
+    private var wakeListening = false
+    private val wakeHandler = Handler(Looper.getMainLooper())
+
+    private var latestVersionCode: Int? = null
 
     private val INPUT_SAMPLE_RATE = 16000
     private val OUTPUT_SAMPLE_RATE = 24000
@@ -68,6 +97,10 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         etApiKey = findViewById(R.id.etApiKey)
         surfaceView = findViewById(R.id.cameraPreview)
+        tvTranscript = findViewById(R.id.tvTranscript)
+        transcriptScroll = findViewById(R.id.transcriptScroll)
+        cbWake = findViewById(R.id.cbWake)
+        btnUpdate = findViewById(R.id.btnUpdate)
 
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
         val savedKey = prefs.getString(PREF_KEY_NAME, "") ?: ""
@@ -102,6 +135,20 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnSendFrame).setOnClickListener {
             sendCameraFrame()
         }
+
+        cbWake.setOnCheckedChangeListener { _, isChecked ->
+            wakeMode = isChecked
+            if (isChecked) {
+                startWakeListening()
+            } else {
+                stopWakeListening()
+                updateStatus("Ascolto \"HiBuddy\" disattivato")
+            }
+        }
+
+        btnUpdate.setOnClickListener { downloadAndInstallUpdate() }
+
+        checkForUpdate()
     }
 
     private fun hasRequiredPermissions(): Boolean {
@@ -140,6 +187,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        isSessionStarting = true
+        stopWakeListening()
+        clearTranscript()
         updateStatus("Cerco un modello Live disponibile...")
         thread {
             val model = resolveLiveModel(userToken)
@@ -204,6 +254,7 @@ class MainActivity : AppCompatActivity() {
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 isConnected = true
+                isSessionStarting = false
                 updateStatus("Configuro ${model.removePrefix("models/")}...")
                 sendInitialSetup(ws, model)
             }
@@ -216,16 +267,20 @@ class MainActivity : AppCompatActivity() {
                 isConnected = false
                 isRecording = false
                 isSessionReady = false
+                isSessionStarting = false
                 videoHandler.removeCallbacks(videoRunnable)
                 updateStatus("Errore: ${t.message}")
+                maybeResumeWake()
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 isConnected = false
                 isRecording = false
                 isSessionReady = false
+                isSessionStarting = false
                 videoHandler.removeCallbacks(videoRunnable)
                 updateStatus("Disconnesso ($reason)")
+                maybeResumeWake()
             }
         })
     }
@@ -234,15 +289,19 @@ class MainActivity : AppCompatActivity() {
         isConnected = false
         isRecording = false
         isSessionReady = false
+        isSessionStarting = false
         videoHandler.removeCallbacks(videoRunnable)
         webSocket?.close(1000, "Chiusura utente")
         webSocket = null
         updateStatus("Sessione terminata")
+        maybeResumeWake()
     }
     private fun sendInitialSetup(ws: WebSocket, model: String) {
         val setupJson = JSONObject().apply {
             put("setup", JSONObject().apply {
                 put("model", model)
+                put("inputAudioTranscription", JSONObject())
+                put("outputAudioTranscription", JSONObject())
                 put("generationConfig", JSONObject().apply {
                     put("responseModalities", JSONArray().put("AUDIO"))
                     put("speechConfig", JSONObject().apply {
@@ -331,6 +390,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             val serverContent = json.optJSONObject("serverContent") ?: return
+
+            serverContent.optJSONObject("inputTranscription")?.optString("text")?.let {
+                if (it.isNotEmpty()) appendTranscript("Tu", it)
+            }
+            serverContent.optJSONObject("outputTranscription")?.optString("text")?.let {
+                if (it.isNotEmpty()) appendTranscript("HiBuddy", it)
+            }
 
             if (serverContent.optBoolean("interrupted", false)) {
                 audioTrack?.pause()
@@ -438,9 +504,224 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun appendTranscript(speaker: String, chunk: String) {
+        runOnUiThread {
+            if (transcriptSpeaker != speaker) {
+                if (transcript.isNotEmpty()) transcript.append('\n')
+                transcript.append(speaker).append(": ")
+                transcriptSpeaker = speaker
+            }
+            transcript.append(chunk)
+            tvTranscript.text = transcript.toString()
+            transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
+        }
+    }
+
+    private fun clearTranscript() {
+        runOnUiThread {
+            transcript.setLength(0)
+            transcriptSpeaker = null
+            tvTranscript.text = ""
+        }
+    }
+
+    private fun startWakeListening() {
+        if (!wakeMode || wakeListening || isConnected || isSessionStarting) return
+        if (!hasRequiredPermissions()) {
+            updateStatus("Servono i permessi microfono per l'ascolto")
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            updateStatus("Riconoscimento vocale non disponibile sul telefono")
+            return
+        }
+
+        speechRecognizer?.destroy()
+        val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer = recognizer
+        recognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+
+            override fun onError(error: Int) {
+                wakeListening = false
+                scheduleWakeRestart()
+            }
+
+            override fun onResults(results: Bundle?) {
+                wakeListening = false
+                checkWakePhrase(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
+                scheduleWakeRestart()
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                checkWakePhrase(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
+            }
+        })
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "it-IT")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+        wakeListening = true
+        updateStatus("In ascolto: dì \"HiBuddy\"")
+        recognizer.startListening(intent)
+    }
+
+    private fun checkWakePhrase(candidates: List<String>?) {
+        val heard = candidates?.any { text ->
+            val normalized = text.lowercase().replace(Regex("[^a-z]"), "")
+            WAKE_PHRASES.any { normalized.contains(it) }
+        } ?: false
+        if (!heard) return
+
+        stopWakeListening()
+        beep()
+        updateStatus("HiBuddy ti ha sentito!")
+        startSession()
+    }
+
+    private fun scheduleWakeRestart() {
+        if (!wakeMode || isConnected || isSessionStarting) return
+        wakeHandler.postDelayed({
+            if (wakeMode && !isConnected && !isSessionStarting) startWakeListening()
+        }, 800L)
+    }
+
+    private fun stopWakeListening() {
+        wakeListening = false
+        wakeHandler.removeCallbacksAndMessages(null)
+        speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+    }
+
+    private fun maybeResumeWake() {
+        if (!wakeMode || isSessionStarting) return
+        wakeHandler.postDelayed({
+            if (wakeMode && !isConnected && !isSessionStarting) startWakeListening()
+        }, 600L)
+    }
+
+    private fun beep() {
+        try {
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 70)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+            Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 400L)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun checkForUpdate() {
+        thread {
+            try {
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(10, TimeUnit.SECONDS)
+                    .build()
+                val request = Request.Builder()
+                    .url("https://api.github.com/repos/$UPDATE_REPO/releases/latest")
+                    .header("Accept", "application/vnd.github+json")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use
+                    val body = response.body?.string() ?: return@use
+                    val tag = JSONObject(body).optString("tag_name")
+                    val latest = tag.filter { it.isDigit() }.toIntOrNull() ?: return@use
+                    if (latest > currentVersionCode()) {
+                        latestVersionCode = latest
+                        runOnUiThread {
+                            btnUpdate.text = "Aggiorna a $latest"
+                            btnUpdate.visibility = View.VISIBLE
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentVersionCode(): Int {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode.toInt()
+        } else {
+            info.versionCode
+        }
+    }
+
+    private fun downloadAndInstallUpdate() {
+        val version = latestVersionCode ?: return
+        btnUpdate.isEnabled = false
+        updateStatus("Scarico la versione $version...")
+        thread {
+            try {
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(60, TimeUnit.SECONDS)
+                    .build()
+                val request = Request.Builder()
+                    .url("https://github.com/$UPDATE_REPO/releases/download/v$version/app-debug.apk")
+                    .build()
+                val dir = File(cacheDir, "updates").apply { mkdirs() }
+                val apk = File(dir, "hibuddy-$version.apk")
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        updateStatus("Download non riuscito (${response.code})")
+                        runOnUiThread { btnUpdate.isEnabled = true }
+                        return@use
+                    }
+                    response.body?.byteStream()?.use { input ->
+                        apk.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+                runOnUiThread { installApk(apk) }
+            } catch (e: Exception) {
+                updateStatus("Errore aggiornamento: ${e.message}")
+                runOnUiThread { btnUpdate.isEnabled = true }
+            }
+        }
+    }
+
+    private fun installApk(apk: File) {
+        btnUpdate.isEnabled = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            updateStatus("Consenti l'installazione, poi tocca di nuovo Aggiorna")
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")
+                )
+            )
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apk)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            updateStatus("Completa l'installazione dalla finestra di Android")
+        } catch (e: Exception) {
+            updateStatus("Impossibile avviare l'installazione: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
-        super.onDestroy()
+        wakeMode = false
+        stopWakeListening()
         stopSession()
         audioTrack?.release()
+        super.onDestroy()
     }
 }
