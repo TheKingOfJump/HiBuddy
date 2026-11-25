@@ -25,11 +25,14 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -50,6 +53,14 @@ class MainActivity : AppCompatActivity() {
     private val PREF_KEY_NAME = "user_" + "token_secret"
     private val UPDATE_REPO = "TheKingOfJump/HiBuddy"
     private val WAKE_PHRASES = listOf("hibuddy", "haibuddy", "heibuddy", "aibuddy")
+    private val PREF_VOICE = "voice_name"
+    private val VOICES = listOf(
+        "Aoede", "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus",
+        "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
+        "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+        "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird",
+        "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+    )
 
     private var webSocket: WebSocket? = null
     private var isConnected = false
@@ -63,6 +74,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvTranscript: TextView
     private lateinit var transcriptScroll: ScrollView
     private lateinit var etMessage: EditText
+    private lateinit var spVoice: Spinner
+    private var voiceName = "Aoede"
     private lateinit var cbWake: CheckBox
     private lateinit var btnUpdate: Button
     private var camera: Camera? = null
@@ -167,6 +180,7 @@ class MainActivity : AppCompatActivity() {
         tvTranscript = findViewById(R.id.tvTranscript)
         transcriptScroll = findViewById(R.id.transcriptScroll)
         etMessage = findViewById(R.id.etMessage)
+        spVoice = findViewById(R.id.spVoice)
         cbWake = findViewById(R.id.cbWake)
         btnUpdate = findViewById(R.id.btnUpdate)
 
@@ -177,6 +191,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+
+        val voiceAdapter = ArrayAdapter(this, R.layout.spinner_item, VOICES)
+        voiceAdapter.setDropDownViewResource(R.layout.spinner_item)
+        spVoice.adapter = voiceAdapter
+        voiceName = prefs.getString(PREF_VOICE, "Aoede") ?: "Aoede"
+        spVoice.setSelection(VOICES.indexOf(voiceName).coerceAtLeast(0))
+        spVoice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                voiceName = VOICES[position]
+                prefs.edit().putString(PREF_VOICE, voiceName).apply()
+                if (isConnected) updateStatus("Voce $voiceName: vale dalla prossima sessione")
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
         val savedKey = prefs.getString(PREF_KEY_NAME, "") ?: ""
         if (savedKey.isNotEmpty()) {
             etApiKey.setText(savedKey)
@@ -341,11 +371,28 @@ class MainActivity : AppCompatActivity() {
                 isConnected = true
                 isSessionStarting = false
                 updateStatus("Configuro ${model.removePrefix("models/")}...")
+                debugLog("connessione aperta")
                 sendInitialSetup(ws, model)
+                debugLog("setup inviato (voce $voiceName)")
+                videoHandler.postDelayed({
+                    if (!isSessionReady) {
+                        debugLog("nessuna risposta dal server dopo 12s")
+                        updateStatus("Il server non risponde: guarda il riquadro qui sopra")
+                    }
+                }, 12000L)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                handleServerMessage(text)
+                if (text.contains("inlineData")) {
+                    if (!isSessionReady) debugLog("server: audio (${text.length} caratteri)")
+                } else {
+                    debugLog("server: " + text.take(400))
+                }
+                try {
+                    handleServerMessage(text)
+                } catch (t: Throwable) {
+                    debugLog("errore lettura risposta: ${t.message}")
+                }
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
@@ -355,6 +402,13 @@ class MainActivity : AppCompatActivity() {
                 isSessionStarting = false
                 videoHandler.removeCallbacks(videoRunnable)
                 updateStatus("Errore: ${t.message}")
+                debugLog("connessione fallita: ${t.message} (http ${response?.code ?: "-"})")
+                val body = try {
+                    response?.body?.string()
+                } catch (e: Throwable) {
+                    null
+                }
+                if (!body.isNullOrBlank()) debugLog("dettaglio: " + body.take(400))
                 maybeResumeWake()
             }
 
@@ -365,6 +419,7 @@ class MainActivity : AppCompatActivity() {
                 isSessionStarting = false
                 videoHandler.removeCallbacks(videoRunnable)
                 updateStatus("Disconnesso ($reason)")
+                debugLog("chiuso dal server: $code $reason")
                 maybeResumeWake()
             }
         })
@@ -392,7 +447,7 @@ class MainActivity : AppCompatActivity() {
                     put("speechConfig", JSONObject().apply {
                         put("voiceConfig", JSONObject().apply {
                             put("prebuiltVoiceConfig", JSONObject().apply {
-                                put("voiceName", "Aoede")
+                                put("voiceName", voiceName)
                             })
                         })
                     })
@@ -668,6 +723,17 @@ class MainActivity : AppCompatActivity() {
         webSocket?.send(message.toString())
         appendUserText(text)
         etMessage.setText("")
+    }
+
+    private fun debugLog(line: String) {
+        if (!::tvTranscript.isInitialized) return
+        runOnUiThread {
+            if (transcript.isNotEmpty()) transcript.append('\n')
+            transcript.append("\u2022 ").append(line)
+            transcriptSpeaker = null
+            tvTranscript.text = transcript.toString()
+            transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
+        }
     }
 
     private fun appendUserText(text: String) {

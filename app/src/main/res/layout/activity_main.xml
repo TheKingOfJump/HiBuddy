@@ -30,6 +30,29 @@
             android:text="Salva" />
     </LinearLayout>
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Voce:"
+            android:textColor="#FFFFFF"
+            android:paddingEnd="8dp" />
+
+        <Spinner
+            android:id="@+id/spVoice"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="#303030"
+            android:popupBackground="#303030" />
+    </LinearLayout>
+
     <SurfaceView
         android:id="@+id/cameraPreview"
         android:layout_width="match_parent"
