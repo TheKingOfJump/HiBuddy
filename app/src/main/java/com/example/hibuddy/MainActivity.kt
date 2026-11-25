@@ -1020,29 +1020,65 @@ class MainActivity : AppCompatActivity() {
         thread {
             try {
                 val client = OkHttpClient.Builder()
-                    .connectTimeout(15, TimeUnit.SECONDS)
-                    .readTimeout(60, TimeUnit.SECONDS)
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .readTimeout(120, TimeUnit.SECONDS)
                     .build()
                 val request = Request.Builder()
                     .url("https://github.com/$UPDATE_REPO/releases/download/v$version/app-debug.apk")
                     .build()
                 val dir = File(cacheDir, "updates").apply { mkdirs() }
                 val apk = File(dir, "hibuddy-$version.apk")
+                var failure: String? = null
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
-                        updateStatus("Download non riuscito (${response.code})")
-                        runOnUiThread { btnUpdate.isEnabled = true }
+                        failure = "il server ha risposto ${response.code}"
                         return@use
                     }
                     response.body?.byteStream()?.use { input ->
                         apk.outputStream().use { output -> input.copyTo(output) }
                     }
                 }
+                if (failure != null) {
+                    updateStatus("Download non riuscito: $failure")
+                    offerBrowserDownload(version, failure ?: "")
+                    return@thread
+                }
+                if (apk.length() < 1_000_000L) {
+                    updateStatus("Download incompleto (${apk.length()} byte)")
+                    offerBrowserDownload(version, "il file scaricato e' incompleto")
+                    return@thread
+                }
                 runOnUiThread { installApk(apk) }
             } catch (t: Throwable) {
-                updateStatus("Errore aggiornamento: ${t.message}")
+                val reason = "${t.javaClass.simpleName}: ${t.message ?: "nessun dettaglio"}"
+                updateStatus("Errore aggiornamento: $reason")
+                debugLog("aggiornamento fallito: $reason")
+                offerBrowserDownload(version, reason)
+            } finally {
                 runOnUiThread { btnUpdate.isEnabled = true }
             }
+        }
+    }
+
+    private fun offerBrowserDownload(version: Int, reason: String) {
+        runOnUiThread {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Download automatico non riuscito")
+                .setMessage("$reason\n\nVuoi aprire la pagina di download nel browser?")
+                .setPositiveButton("Apri browser") { _, _ ->
+                    try {
+                        startActivity(
+                            Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse("https://github.com/$UPDATE_REPO/releases/tag/v$version")
+                            )
+                        )
+                    } catch (t: Throwable) {
+                        updateStatus("Impossibile aprire il browser: ${t.message}")
+                    }
+                }
+                .setNegativeButton("Annulla", null)
+                .show()
         }
     }
 
