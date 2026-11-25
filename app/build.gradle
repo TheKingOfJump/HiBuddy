@@ -3,6 +3,8 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def signingKeystore = System.getenv("HIBUDDY_KEYSTORE")
+
 android {
     namespace 'com.example.hibuddy'
     compileSdk 34
@@ -15,7 +17,24 @@ android {
         versionName "1.0"
     }
 
+    signingConfigs {
+        if (signingKeystore) {
+            hibuddy {
+                storeFile file(signingKeystore)
+                storeType "PKCS12"
+                storePassword System.getenv("HIBUDDY_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("HIBUDDY_KEY_ALIAS") ?: "hibuddy"
+                keyPassword System.getenv("HIBUDDY_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (signingKeystore) {
+                signingConfig signingConfigs.hibuddy
+            }
+        }
         release {
             minifyEnabled false
         }

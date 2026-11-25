@@ -27,11 +27,20 @@ jobs:
       with:
         gradle-version: '8.2'
 
-    - name: Cache chiave di firma debug
-      uses: actions/cache@v4
-      with:
-        path: ~/.android/debug.keystore
-        key: hibuddy-debug-keystore-v1
+    - name: Prepara chiave di firma
+      env:
+        KEYSTORE_B64: ${{ secrets.HIBUDDY_KEYSTORE_B64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.HIBUDDY_KEYSTORE_PASSWORD }}
+      run: |
+        if [ -n "$KEYSTORE_B64" ]; then
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/hibuddy.p12"
+          echo "HIBUDDY_KEYSTORE=$RUNNER_TEMP/hibuddy.p12" >> "$GITHUB_ENV"
+          echo "HIBUDDY_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "HIBUDDY_KEY_ALIAS=hibuddy" >> "$GITHUB_ENV"
+          echo "Chiave di firma pronta"
+        else
+          echo "Nessuna chiave di firma: uso la debug keystore predefinita"
+        fi
 
     - name: Imposta versione build
       run: |
@@ -41,6 +50,9 @@ jobs:
 
     - name: Compila APK
       run: gradle assembleDebug
+
+    - name: Verifica firma APK
+      run: keytool -printcert -jarfile app/build/outputs/apk/debug/app-debug.apk | grep -E "Owner|SHA256" || true
 
     - name: Carica APK pronto
       uses: actions/upload-artifact@v4
