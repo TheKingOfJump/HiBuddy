@@ -22,6 +22,7 @@ import android.util.Base64
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -60,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var surfaceView: SurfaceView
     private lateinit var tvTranscript: TextView
     private lateinit var transcriptScroll: ScrollView
+    private lateinit var etMessage: EditText
     private lateinit var cbWake: CheckBox
     private lateinit var btnUpdate: Button
     private var camera: Camera? = null
@@ -99,6 +101,7 @@ class MainActivity : AppCompatActivity() {
         surfaceView = findViewById(R.id.cameraPreview)
         tvTranscript = findViewById(R.id.tvTranscript)
         transcriptScroll = findViewById(R.id.transcriptScroll)
+        etMessage = findViewById(R.id.etMessage)
         cbWake = findViewById(R.id.cbWake)
         btnUpdate = findViewById(R.id.btnUpdate)
 
@@ -143,6 +146,16 @@ class MainActivity : AppCompatActivity() {
             } else {
                 stopWakeListening()
                 updateStatus("Ascolto \"HiBuddy\" disattivato")
+            }
+        }
+
+        findViewById<Button>(R.id.btnSendText).setOnClickListener { sendTextMessage() }
+        etMessage.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                sendTextMessage()
+                true
+            } else {
+                false
             }
         }
 
@@ -501,6 +514,37 @@ class MainActivity : AppCompatActivity() {
     private fun updateStatus(text: String) {
         runOnUiThread {
             statusText.text = text
+        }
+    }
+
+    private fun sendTextMessage() {
+        val text = etMessage.text.toString().trim()
+        if (text.isEmpty()) return
+        if (!isConnected || !isSessionReady) {
+            updateStatus("Prima premi \"Parla con AI\" per aprire la sessione")
+            return
+        }
+        val message = JSONObject().apply {
+            put("clientContent", JSONObject().apply {
+                put("turns", JSONArray().put(JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().put(JSONObject().apply { put("text", text) }))
+                }))
+                put("turnComplete", true)
+            })
+        }
+        webSocket?.send(message.toString())
+        appendUserText(text)
+        etMessage.setText("")
+    }
+
+    private fun appendUserText(text: String) {
+        runOnUiThread {
+            if (transcript.isNotEmpty()) transcript.append('\n')
+            transcript.append("Tu: ").append(text)
+            transcriptSpeaker = null
+            tvTranscript.text = transcript.toString()
+            transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
         }
     }
 
