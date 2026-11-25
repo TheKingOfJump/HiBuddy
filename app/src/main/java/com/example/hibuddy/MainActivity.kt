@@ -10,9 +10,11 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.Camera
 import android.media.*
+import android.media.audiofx.AcousticEchoCanceler
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -92,6 +94,8 @@ class MainActivity : AppCompatActivity() {
 
     private var latestVersionCode: Int? = null
     private var setupAttempt = 0
+    @Volatile
+    private var lastAudioChunkAt = 0L
 
     private val INPUT_SAMPLE_RATE = 16000
     private val OUTPUT_SAMPLE_RATE = 24000
@@ -540,12 +544,24 @@ class MainActivity : AppCompatActivity() {
                 bufferSize
             )
 
+            val echoCanceller = try {
+                AcousticEchoCanceler.create(recorder.audioSessionId)
+            } catch (t: Throwable) {
+                null
+            }
+            try {
+                echoCanceller?.enabled = true
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
+
             val buffer = ByteArray(bufferSize)
             recorder.startRecording()
 
             while (isRecording && isConnected) {
                 val read = recorder.read(buffer, 0, buffer.size)
-                if (read > 0) {
+                val modelIsTalking = SystemClock.elapsedRealtime() - lastAudioChunkAt < 1200L
+                if (read > 0 && !modelIsTalking) {
                     val base64Audio = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP)
                     val msg = JSONObject().apply {
                         put("realtimeInput", JSONObject().apply {
@@ -561,6 +577,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 recorder.stop()
                 recorder.release()
+                echoCanceller?.release()
             } catch (t: Throwable) {
                 t.printStackTrace()
             }
@@ -615,7 +632,9 @@ class MainActivity : AppCompatActivity() {
                     val mimeType = inlineData.optString("mimeType")
                     if (mimeType.startsWith("audio/pcm")) {
                         val audioBytes = Base64.decode(inlineData.getString("data"), Base64.DEFAULT)
-                        audioTrack?.write(audioBytes, 0, audioBytes.size)
+                        lastAudioChunkAt = SystemClock.elapsedRealtime()
+                        val written = audioTrack?.write(audioBytes, 0, audioBytes.size) ?: -1
+                        if (written < 0) debugLog("errore scrittura audio: $written")
                     }
                 }
             }
@@ -650,7 +669,7 @@ class MainActivity : AppCompatActivity() {
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
-            val bufferSize = if (minBuffer > 0) minBuffer * 2 else OUTPUT_SAMPLE_RATE
+            val bufferSize = maxOf(if (minBuffer > 0) minBuffer * 4 else 0, OUTPUT_SAMPLE_RATE)
             audioTrack = AudioTrack(
                 AudioManager.STREAM_MUSIC,
                 OUTPUT_SAMPLE_RATE,
