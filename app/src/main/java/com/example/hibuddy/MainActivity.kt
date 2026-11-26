@@ -120,6 +120,7 @@ class MainActivity : AppCompatActivity() {
     private var currentModel = MODEL
     private var wakeMode = false
     private var wakeListening = false
+    private var wakeRestartDelay = 800L
     private val wakeHandler = Handler(Looper.getMainLooper())
 
     @Volatile
@@ -326,7 +327,27 @@ class MainActivity : AppCompatActivity() {
         btnCloseSettings.setOnClickListener { showSection(screenChat) }
         btnNotes.setOnClickListener { showNotes() }
 
-        btnUpdate.setOnClickListener { downloadAndInstallUpdate() }
+        btnUpdate.setOnClickListener {
+            if (latestVersionCode != null) {
+                downloadAndInstallUpdate()
+                return@setOnClickListener
+            }
+            updateStatus("Controllo aggiornamenti...")
+            thread {
+                val latest = findLatestVersion()
+                runOnUiThread {
+                    if (latest == null) {
+                        updateStatus("Controllo aggiornamenti non riuscito: rete o certificati")
+                    } else if (latest <= currentVersionCode()) {
+                        updateStatus("Hai gia' la versione piu' recente")
+                    } else {
+                        latestVersionCode = latest
+                        btnUpdate.text = "Aggiorna a $latest"
+                        downloadAndInstallUpdate()
+                    }
+                }
+            }
+        }
 
         checkForUpdate()
     }
@@ -1346,6 +1367,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         }
         wakeListening = true
+        wakeRestartDelay = 800L
         updateStatus("In ascolto: dì \"HiBuddy\"")
         wakeHandler.removeCallbacks(wakeWatchdog)
         wakeHandler.postDelayed(wakeWatchdog, 8000L)
@@ -1414,9 +1436,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun scheduleWakeRestart() {
         if (destroyed || !wakeMode || isConnected || isSessionStarting) return
+        wakeRestartDelay = minOf(wakeRestartDelay * 2, 5000L)
         wakeHandler.postDelayed({
             if (wakeMode && !isConnected && !isSessionStarting) startWakeListening()
-        }, 800L)
+        }, wakeRestartDelay)
     }
 
     private fun stopWakeListening() {
@@ -1525,29 +1548,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkForUpdate() {
-        thread {
+    private fun findLatestVersion(): Int? {
+        val request = Request.Builder()
+            .url("https://api.github.com/repos/$UPDATE_REPO/releases/latest")
+            .header("Accept", "application/vnd.github+json")
+            .build()
+        for (client in listOf(buildUpdateClient(), buildLooseUpdateClient())) {
             try {
-                val client = buildUpdateClient()
-                val request = Request.Builder()
-                    .url("https://api.github.com/repos/$UPDATE_REPO/releases/latest")
-                    .header("Accept", "application/vnd.github+json")
-                    .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use
                     val body = response.body?.string() ?: return@use
                     val tag = JSONObject(body).optString("tag_name")
                     val latest = tag.filter { it.isDigit() }.toIntOrNull() ?: return@use
-                    if (latest > currentVersionCode()) {
-                        latestVersionCode = latest
-                        runOnUiThread {
-                            btnUpdate.text = "Aggiorna a $latest"
-                            btnUpdate.visibility = View.VISIBLE
-                        }
-                    }
+                    if (latest > 0) return latest
                 }
             } catch (t: Throwable) {
-                t.printStackTrace()
+                debugLog("controllo aggiornamenti fallito: ${t.javaClass.simpleName}")
+            }
+        }
+        return null
+    }
+
+    private fun checkForUpdate() {
+        thread {
+            val latest = findLatestVersion() ?: return@thread
+            latestVersionCode = latest
+            runOnUiThread {
+                if (latest > currentVersionCode()) {
+                    btnUpdate.text = "Aggiorna a $latest"
+                } else {
+                    btnUpdate.text = "Aggiorna"
+                    updateStatus("Hai gia' la versione piu' recente")
+                }
             }
         }
     }
