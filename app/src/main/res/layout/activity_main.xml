@@ -50,6 +50,9 @@
 
             <Button
                 android:id="@+id/btnSendText"
+                android:background="@drawable/btn_blue"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Invia" />
@@ -62,6 +65,9 @@
 
             <Button
                 android:id="@+id/btnConnect"
+                android:background="@drawable/btn_green"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="2"
@@ -69,6 +75,9 @@
 
             <Button
                 android:id="@+id/btnNotes"
+                android:background="@drawable/btn_blue"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -91,6 +100,9 @@
 
             <Button
                 android:id="@+id/btnUpdate"
+                android:background="@drawable/btn_orange"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Aggiorna"
@@ -104,6 +116,9 @@
 
             <Button
                 android:id="@+id/btnOpenCamera"
+                android:background="@drawable/btn_purple"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -111,6 +126,9 @@
 
             <Button
                 android:id="@+id/btnOpenSettings"
+                android:background="@drawable/btn_teal"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -140,6 +158,9 @@
 
             <Button
                 android:id="@+id/btnSendFrame"
+                android:background="@drawable/btn_purple"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -147,6 +168,9 @@
 
             <Button
                 android:id="@+id/btnCloseCamera"
+                android:background="@drawable/btn_gray"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -188,6 +212,9 @@
 
             <Button
                 android:id="@+id/btnSaveKey"
+                android:background="@drawable/btn_blue"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Salva" />
@@ -218,6 +245,9 @@
 
         <Button
             android:id="@+id/btnCloseSettings"
+                android:background="@drawable/btn_gray"
+                android:backgroundTint="@null"
+                android:textColor="#FFFFFF"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Chiudi" />

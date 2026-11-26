@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private val UPDATE_REPO = "TheKingOfJump/HiBuddy"
     private val WAKE_PHRASES = listOf("hibuddy", "haibuddy", "heibuddy", "aibuddy")
     private val PREF_VOICE = "voice_name"
+    private val PREF_WAKE = "wake_enabled"
     private val PREF_LOOSE_UPDATE = "update_loose_check"
     private val VOICES = listOf(
         "Aoede", "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus",
@@ -110,6 +111,10 @@ class MainActivity : AppCompatActivity() {
     private var wakeListening = false
     private val wakeHandler = Handler(Looper.getMainLooper())
 
+    @Volatile
+    private var pendingText: String? = null
+    @Volatile
+    private var destroyed = false
     private var latestVersionCode: Int? = null
     private var setupAttempt = 0
     @Volatile
@@ -276,8 +281,11 @@ class MainActivity : AppCompatActivity() {
             sendCameraFrame()
         }
 
+        cbWake.isChecked = prefs.getBoolean(PREF_WAKE, true)
+        wakeMode = cbWake.isChecked
         cbWake.setOnCheckedChangeListener { _, isChecked ->
             wakeMode = isChecked
+            prefs.edit().putBoolean(PREF_WAKE, isChecked).apply()
             if (isChecked) {
                 startWakeListening()
             } else {
@@ -285,6 +293,7 @@ class MainActivity : AppCompatActivity() {
                 updateStatus("Ascolto \"HiBuddy\" disattivato")
             }
         }
+        if (wakeMode) maybeResumeWake()
 
         findViewById<Button>(R.id.btnSendText).setOnClickListener { sendTextMessage() }
         etMessage.setOnEditorActionListener { _, actionId, _ ->
@@ -688,7 +697,13 @@ class MainActivity : AppCompatActivity() {
                 isSessionReady = true
                 updateStatus("Connesso! Parla pure...")
                 startAudioStreaming()
-                videoHandler.post(videoRunnable)
+                if (cameraVisible) videoHandler.post(videoRunnable)
+                val pending = pendingText
+                if (pending != null) {
+                    pendingText = null
+                    appendUserText(pending)
+                    sendClientText(pending)
+                }
                 return
             }
 
@@ -837,8 +852,12 @@ class MainActivity : AppCompatActivity() {
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                camera?.stopPreview()
-                camera?.release()
+                try {
+                    camera?.stopPreview()
+                    camera?.release()
+                } catch (t: Throwable) {
+                    t.printStackTrace()
+                }
                 camera = null
             }
         })
@@ -1099,10 +1118,18 @@ class MainActivity : AppCompatActivity() {
     private fun sendTextMessage() {
         val text = etMessage.text.toString().trim()
         if (text.isEmpty()) return
+        etMessage.setText("")
         if (!isConnected || !isSessionReady) {
-            updateStatus("Prima premi \"Parla con AI\" per aprire la sessione")
+            pendingText = text
+            updateStatus("Apro la sessione per il messaggio...")
+            if (!isSessionStarting) startSession()
             return
         }
+        sendClientText(text)
+        appendUserText(text)
+    }
+
+    private fun sendClientText(text: String) {
         val message = JSONObject().apply {
             put("clientContent", JSONObject().apply {
                 put("turns", JSONArray().put(JSONObject().apply {
@@ -1113,8 +1140,6 @@ class MainActivity : AppCompatActivity() {
             })
         }
         webSocket?.send(message.toString())
-        appendUserText(text)
-        etMessage.setText("")
     }
 
     private fun debugLog(line: String) {
@@ -1160,7 +1185,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startWakeListening() {
-        if (!wakeMode || wakeListening || isConnected || isSessionStarting) return
+        if (destroyed || !wakeMode || wakeListening || isConnected || isSessionStarting) return
         if (!hasRequiredPermissions()) {
             updateStatus("Servono i permessi microfono per l'ascolto")
             return
@@ -1205,7 +1230,13 @@ class MainActivity : AppCompatActivity() {
         }
         wakeListening = true
         updateStatus("In ascolto: dì \"HiBuddy\"")
-        recognizer.startListening(intent)
+        try {
+            recognizer.startListening(intent)
+        } catch (t: Throwable) {
+            wakeListening = false
+            debugLog("avvio ascolto fallito: ${t.message}")
+            scheduleWakeRestart()
+        }
     }
 
     private fun checkWakePhrase(candidates: List<String>?) {
@@ -1222,7 +1253,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scheduleWakeRestart() {
-        if (!wakeMode || isConnected || isSessionStarting) return
+        if (destroyed || !wakeMode || isConnected || isSessionStarting) return
         wakeHandler.postDelayed({
             if (wakeMode && !isConnected && !isSessionStarting) startWakeListening()
         }, 800L)
@@ -1231,13 +1262,17 @@ class MainActivity : AppCompatActivity() {
     private fun stopWakeListening() {
         wakeListening = false
         wakeHandler.removeCallbacksAndMessages(null)
-        speechRecognizer?.cancel()
-        speechRecognizer?.destroy()
+        try {
+            speechRecognizer?.cancel()
+            speechRecognizer?.destroy()
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
         speechRecognizer = null
     }
 
     private fun maybeResumeWake() {
-        if (!wakeMode || isSessionStarting) return
+        if (destroyed || !wakeMode || isSessionStarting) return
         wakeHandler.postDelayed({
             if (wakeMode && !isConnected && !isSessionStarting) startWakeListening()
         }, 600L)
@@ -1498,6 +1533,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         wakeMode = false
         stopWakeListening()
         stopSession()
