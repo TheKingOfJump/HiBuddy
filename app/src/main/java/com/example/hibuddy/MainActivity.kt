@@ -107,6 +107,8 @@ class MainActivity : AppCompatActivity() {
     private var transcriptSpeaker: String? = null
 
     private var speechRecognizer: SpeechRecognizer? = null
+    @Volatile
+    private var pendingFrame = false
     private var wakeMode = false
     private var wakeListening = false
     private val wakeHandler = Handler(Looper.getMainLooper())
@@ -278,7 +280,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnSendFrame).setOnClickListener {
-            sendCameraFrame()
+            sendCameraFrame(true)
         }
 
         cbWake.isChecked = prefs.getBoolean(PREF_WAKE, true)
@@ -339,6 +341,7 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == PERMISSION_REQUEST_CODE && hasRequiredPermissions()) {
             setupCamera()
             updateStatus("Permessi concessi! Pronto.")
+            maybeResumeWake()
         } else {
             updateStatus("Permessi Microfono/Fotocamera necessari")
         }
@@ -704,6 +707,10 @@ class MainActivity : AppCompatActivity() {
                     appendUserText(pending)
                     sendClientText(pending)
                 }
+                if (pendingFrame) {
+                    pendingFrame = false
+                    sendCameraFrame(true)
+                }
                 return
             }
 
@@ -756,9 +763,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendCameraFrame() {
-        val jpegData = lastFrameJpeg ?: return
-        if (!isConnected || !isSessionReady || !cameraVisible) return
+    private fun sendCameraFrame(manual: Boolean = false) {
+        val jpegData = lastFrameJpeg
+        if (jpegData == null) {
+            if (manual) updateStatus("La fotocamera si sta avviando: riprova tra un secondo")
+            return
+        }
+        if (!cameraVisible) return
+        if (!isConnected || !isSessionReady) {
+            if (manual) {
+                pendingFrame = true
+                updateStatus("Apro la sessione e invio la foto...")
+                if (!isSessionStarting) startSession()
+            }
+            return
+        }
 
         val base64Img = Base64.encodeToString(jpegData, Base64.NO_WRAP)
         val msg = JSONObject().apply {
@@ -770,6 +789,7 @@ class MainActivity : AppCompatActivity() {
             })
         }
         webSocket?.send(msg.toString())
+        if (manual) updateStatus("Foto inviata")
     }
 
     // AudioTrack.Builder and AudioFormat.Builder only exist from Android 6.0 (API 23);
@@ -1118,11 +1138,20 @@ class MainActivity : AppCompatActivity() {
     private fun sendTextMessage() {
         val text = etMessage.text.toString().trim()
         if (text.isEmpty()) return
+        val savedKey = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+            .getString(PREF_KEY_NAME, "")?.trim() ?: ""
+        if (savedKey.isEmpty()) {
+            updateStatus("Prima salva la chiave API in Impostazioni")
+            return
+        }
         etMessage.setText("")
         if (!isConnected || !isSessionReady) {
             pendingText = text
             updateStatus("Apro la sessione per il messaggio...")
-            if (!isSessionStarting) startSession()
+            if (!isSessionStarting) {
+                startSession()
+                appendUserText(text)
+            }
             return
         }
         sendClientText(text)
@@ -1184,10 +1213,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val wakeListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onBeginningOfSpeech() {}
+        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onEndOfSpeech() {}
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+
+        override fun onError(error: Int) {
+            wakeListening = false
+            if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                updateStatus("Riconoscimento: ${wakeErrorName(error)}")
+                if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
+                    dropWakeRecognizer()
+                }
+            }
+            scheduleWakeRestart()
+        }
+
+        override fun onResults(results: Bundle?) {
+            wakeListening = false
+            checkWakePhrase(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
+            scheduleWakeRestart()
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            checkWakePhrase(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
+        }
+    }
+
+    private fun wakeErrorName(code: Int): String = when (code) {
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "rete lenta (1)"
+        SpeechRecognizer.ERROR_NETWORK -> "rete assente (2)"
+        SpeechRecognizer.ERROR_AUDIO -> "microfono occupato (3)"
+        SpeechRecognizer.ERROR_SERVER -> "server (4)"
+        SpeechRecognizer.ERROR_CLIENT -> "client (5)"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "occupato (8)"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "permessi (9)"
+        else -> "codice $code"
+    }
+
+    private fun dropWakeRecognizer() {
+        try {
+            speechRecognizer?.destroy()
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+        speechRecognizer = null
+    }
+
     private fun startWakeListening() {
         if (destroyed || !wakeMode || wakeListening || isConnected || isSessionStarting) return
         if (!hasRequiredPermissions()) {
             updateStatus("Servono i permessi microfono per l'ascolto")
+            scheduleWakeRestart()
             return
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
@@ -1195,38 +1275,23 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        speechRecognizer?.destroy()
-        val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        speechRecognizer = recognizer
-        recognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-
-            override fun onError(error: Int) {
-                wakeListening = false
-                scheduleWakeRestart()
+        val recognizer = speechRecognizer ?: try {
+            SpeechRecognizer.createSpeechRecognizer(this).also {
+                it.setRecognitionListener(wakeListener)
+                speechRecognizer = it
             }
-
-            override fun onResults(results: Bundle?) {
-                wakeListening = false
-                checkWakePhrase(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
-                scheduleWakeRestart()
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                checkWakePhrase(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
-            }
-        })
+        } catch (t: Throwable) {
+            debugLog("riconoscitore non creato: ${t.message}")
+            scheduleWakeRestart()
+            return
+        }
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "it-IT")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         }
         wakeListening = true
         updateStatus("In ascolto: dì \"HiBuddy\"")
@@ -1235,6 +1300,7 @@ class MainActivity : AppCompatActivity() {
         } catch (t: Throwable) {
             wakeListening = false
             debugLog("avvio ascolto fallito: ${t.message}")
+            dropWakeRecognizer()
             scheduleWakeRestart()
         }
     }
@@ -1264,11 +1330,10 @@ class MainActivity : AppCompatActivity() {
         wakeHandler.removeCallbacksAndMessages(null)
         try {
             speechRecognizer?.cancel()
-            speechRecognizer?.destroy()
         } catch (t: Throwable) {
             t.printStackTrace()
         }
-        speechRecognizer = null
+        dropWakeRecognizer()
     }
 
     private fun maybeResumeWake() {
