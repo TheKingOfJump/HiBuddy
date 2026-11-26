@@ -65,12 +65,14 @@ class MainActivity : AppCompatActivity() {
     private val WAKE_PHRASES = listOf(
         "hibuddy", "haibuddy", "heibuddy", "aibuddy", "hibadi", "aibadi", "eibadi",
         "haibadi", "hibaddy", "aibaddy", "hibody", "aibody", "haibody", "eibody",
-        "hibudi", "aibudi", "haibudi", "ebadi", "aibady"
+        "hibudi", "aibudi", "haibudi", "ebadi", "aibady",
+        "ibody", "ibudi", "ibadi", "ibodi", "ebadi", "aibada", "haibada"
     )
     private val PREF_VOICE = "voice_name"
     private val PREF_WAKE = "wake_enabled"
     private val PREF_MODEL = "live_model"
     private val PREF_LOOSE_UPDATE = "update_loose_check"
+    private val WAKE_TARGETS = listOf("hibuddy", "aibuddy", "hibadi", "aibadi", "hibodi", "aibodi")
     private val VOICES = listOf(
         "Aoede", "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus",
         "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
@@ -1358,17 +1360,56 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkWakePhrase(candidates: List<String>?): Boolean {
-        val heard = candidates?.any { text ->
-            val normalized = text.lowercase().replace(Regex("[^a-z]"), "")
-            WAKE_PHRASES.any { normalized.contains(it) }
-        } ?: false
-        if (!heard) return false
+        val heard = candidates?.any { looksLikeWakeWord(it) } ?: false
+        if (!heard) {
+            val first = candidates?.firstOrNull()
+            if (!first.isNullOrBlank()) debugLog("voce: \"$first\"")
+            return false
+        }
 
         stopWakeListening()
         beep()
         updateStatus("HiBuddy ti ha sentito!")
         startSession()
         return true
+    }
+
+    private fun looksLikeWakeWord(text: String): Boolean {
+        val normalized = text.lowercase().replace(Regex("[^a-z]"), "")
+        if (normalized.isEmpty()) return false
+        if (WAKE_PHRASES.any { normalized.contains(it) }) return true
+        val minWindow = 5
+        val maxWindow = 9
+        for (start in 0..maxOf(0, normalized.length - minWindow)) {
+            val maxLength = minOf(maxWindow, normalized.length - start)
+            for (length in minWindow..maxLength) {
+                val window = normalized.substring(start, start + length)
+                for (target in WAKE_TARGETS) {
+                    if (Math.abs(window.length - target.length) > 2) continue
+                    val allowed = if (window.length >= 6) 2 else 1
+                    if (editDistance(window, target) <= allowed) return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun editDistance(a: String, b: String): Int {
+        val previous = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var diagonal = previous[0]
+            previous[0] = i
+            for (j in 1..b.length) {
+                val saved = previous[j]
+                previous[j] = minOf(
+                    previous[j] + 1,
+                    previous[j - 1] + 1,
+                    diagonal + if (a[i - 1] == b[j - 1]) 0 else 1
+                )
+                diagonal = saved
+            }
+        }
+        return previous[b.length]
     }
 
     private fun scheduleWakeRestart() {
