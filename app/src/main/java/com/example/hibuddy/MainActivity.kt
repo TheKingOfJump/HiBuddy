@@ -65,6 +65,7 @@ class MainActivity : AppCompatActivity() {
     private val WAKE_PHRASES = listOf("hibuddy", "haibuddy", "heibuddy", "aibuddy")
     private val PREF_VOICE = "voice_name"
     private val PREF_WAKE = "wake_enabled"
+    private val PREF_MODEL = "live_model"
     private val PREF_LOOSE_UPDATE = "update_loose_check"
     private val VOICES = listOf(
         "Aoede", "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus",
@@ -109,6 +110,8 @@ class MainActivity : AppCompatActivity() {
     private var speechRecognizer: SpeechRecognizer? = null
     @Volatile
     private var pendingFrame = false
+    @Volatile
+    private var currentModel = MODEL
     private var wakeMode = false
     private var wakeListening = false
     private val wakeHandler = Handler(Looper.getMainLooper())
@@ -360,52 +363,47 @@ class MainActivity : AppCompatActivity() {
         isSessionStarting = true
         stopWakeListening()
         clearTranscript()
-        updateStatus("Cerco un modello Live disponibile...")
-        thread {
-            val model = resolveLiveModel(userToken)
-            runOnUiThread { connectWebSocket(userToken, model) }
-        }
+        val model = presetModel()
+        updateStatus("Apro la sessione con ${model.removePrefix("models/")}...")
+        connectWebSocket(userToken, model)
     }
 
-    private fun resolveLiveModel(token: String): String {
-        val liveModels = try {
-            fetchLiveModels(token)
-        } catch (t: Throwable) {
-            emptyList()
-        }
-        if (liveModels.isEmpty() || MODEL in liveModels) return MODEL
-        return liveModels.firstOrNull { it.contains("native-audio") }
-            ?: liveModels.firstOrNull {
-                it.contains("-live") && !it.contains("translate") &&
-                    !it.contains("transcribe") && !it.contains("thinking")
-            }
-            ?: liveModels.first()
+    private fun presetModel(): String {
+        val saved = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+            .getString(PREF_MODEL, null)
+        return if (saved.isNullOrBlank()) MODEL else saved
     }
 
-    private fun fetchLiveModels(token: String): List<String> {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .build()
-        val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$token&pageSize=1000"
-        return client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-            if (!response.isSuccessful) return emptyList()
-            val body = response.body?.string() ?: return emptyList()
-            val models = JSONObject(body).optJSONArray("models") ?: return emptyList()
-            val result = mutableListOf<String>()
-            for (i in 0 until models.length()) {
-                val model = models.getJSONObject(i)
-                val methods = model.optJSONArray("supportedGenerationMethods") ?: continue
-                val name = model.optString("name")
-                if (name.isEmpty()) continue
-                for (j in 0 until methods.length()) {
-                    if (methods.optString(j) == "bidiGenerateContent") {
-                        result.add(name)
-                        break
+    private fun pickFallbackModel(token: String, current: String): String? {
+        return try {
+            val client = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .build()
+            val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$token&pageSize=1000"
+            client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                val models = JSONObject(body).optJSONArray("models") ?: return null
+                val candidates = mutableListOf<String>()
+                for (i in 0 until models.length()) {
+                    val entry = models.getJSONObject(i)
+                    val methods = entry.optJSONArray("supportedGenerationMethods") ?: continue
+                    val name = entry.optString("name")
+                    var live = false
+                    for (j in 0 until methods.length()) {
+                        if (methods.optString(j) == "bidiGenerateContent") live = true
+                    }
+                    if (live && !name.contains("translate") && !name.contains("transcribe")) {
+                        candidates.add(name)
                     }
                 }
+                candidates.firstOrNull { it != current && it.contains("native-audio") }
+                    ?: candidates.firstOrNull { it != current && it.contains("-live") }
+                    ?: candidates.firstOrNull { it != current }
             }
-            result
+        } catch (t: Throwable) {
+            null
         }
     }
 
@@ -422,6 +420,7 @@ class MainActivity : AppCompatActivity() {
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
 
+        currentModel = model
         val request = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
@@ -447,7 +446,21 @@ class MainActivity : AppCompatActivity() {
                             }
                             else -> {
                                 debugLog("nessuna risposta nemmeno con la configurazione minima")
-                                updateStatus("Il server non risponde: guarda il riquadro")
+                                updateStatus("Il modello non risponde: cerco un'alternativa...")
+                                thread {
+                                    val fallback = pickFallbackModel(userToken, model)
+                                    if (fallback == null) {
+                                        updateStatus("Nessun modello Live utilizzabile con questa chiave")
+                                    } else {
+                                        getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+                                            .edit().remove(PREF_MODEL).apply()
+                                        runOnUiThread {
+                                            debugLog("provo ${fallback.removePrefix("models/")}")
+                                            setupAttempt = 0
+                                            connectWebSocket(userToken, fallback)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }, 10000L)
@@ -698,6 +711,8 @@ class MainActivity : AppCompatActivity() {
 
             if (json.has("setupComplete")) {
                 isSessionReady = true
+                getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
+                    .edit().putString(PREF_MODEL, currentModel).apply()
                 updateStatus("Connesso! Parla pure...")
                 startAudioStreaming()
                 if (cameraVisible) videoHandler.post(videoRunnable)
@@ -789,7 +804,14 @@ class MainActivity : AppCompatActivity() {
             })
         }
         webSocket?.send(msg.toString())
-        if (manual) updateStatus("Foto inviata")
+        if (manual) {
+            updateStatus("Foto inviata (${jpegData.size / 1024} KB)")
+            videoHandler.postDelayed({
+                if (isSessionReady && isConnected) {
+                    sendClientText("Guarda la foto che ti ho appena inviato e dimmi in una frase cosa vedi.")
+                }
+            }, 400L)
+        }
     }
 
     // AudioTrack.Builder and AudioFormat.Builder only exist from Android 6.0 (API 23);
