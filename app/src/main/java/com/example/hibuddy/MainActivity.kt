@@ -62,7 +62,11 @@ class MainActivity : AppCompatActivity() {
     private val PERMISSION_REQUEST_CODE = 1001
     private val PREF_KEY_NAME = "user_" + "token_secret"
     private val UPDATE_REPO = "TheKingOfJump/HiBuddy"
-    private val WAKE_PHRASES = listOf("hibuddy", "haibuddy", "heibuddy", "aibuddy")
+    private val WAKE_PHRASES = listOf(
+        "hibuddy", "haibuddy", "heibuddy", "aibuddy", "hibadi", "aibadi", "eibadi",
+        "haibadi", "hibaddy", "aibaddy", "hibody", "aibody", "haibody", "eibody",
+        "hibudi", "aibudi", "haibudi", "ebadi", "aibady"
+    )
     private val PREF_VOICE = "voice_name"
     private val PREF_WAKE = "wake_enabled"
     private val PREF_MODEL = "live_model"
@@ -273,6 +277,10 @@ class MainActivity : AppCompatActivity() {
 
         checkAndRequestPermissions()
         setupAudioOutput()
+        debugLog(
+            "motore vocale: " +
+                (if (SpeechRecognizer.isRecognitionAvailable(this)) "disponibile" else "ASSENTE sul telefono")
+        )
 
         findViewById<Button>(R.id.btnConnect).setOnClickListener {
             if (!hasRequiredPermissions()) {
@@ -320,6 +328,9 @@ class MainActivity : AppCompatActivity() {
 
         checkForUpdate()
     }
+
+    private fun hasMicPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun hasRequiredPermissions(): Boolean {
         val mic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -1235,6 +1246,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val wakeWatchdog = Runnable {
+        if (wakeListening && !isConnected && !isSessionStarting) {
+            debugLog("nessun evento dal riconoscitore: lo riavvio")
+            wakeListening = false
+            dropWakeRecognizer()
+            scheduleWakeRestart()
+        }
+    }
+
     private val wakeListener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
         override fun onBeginningOfSpeech() {}
@@ -1245,6 +1265,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onError(error: Int) {
             wakeListening = false
+            wakeHandler.removeCallbacks(wakeWatchdog)
             if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                 updateStatus("Riconoscimento: ${wakeErrorName(error)}")
                 if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
@@ -1256,11 +1277,18 @@ class MainActivity : AppCompatActivity() {
 
         override fun onResults(results: Bundle?) {
             wakeListening = false
-            checkWakePhrase(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
+            wakeHandler.removeCallbacks(wakeWatchdog)
+            val candidates = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            if (!checkWakePhrase(candidates)) {
+                val heard = candidates?.firstOrNull()
+                if (!heard.isNullOrBlank()) updateStatus("In ascolto (ho sentito: \"$heard\")")
+            }
             scheduleWakeRestart()
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
+            wakeHandler.removeCallbacks(wakeWatchdog)
+            wakeHandler.postDelayed(wakeWatchdog, 8000L)
             checkWakePhrase(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
         }
     }
@@ -1287,8 +1315,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startWakeListening() {
         if (destroyed || !wakeMode || wakeListening || isConnected || isSessionStarting) return
-        if (!hasRequiredPermissions()) {
-            updateStatus("Servono i permessi microfono per l'ascolto")
+        if (!hasMicPermission()) {
+            updateStatus("Serve il permesso microfono per ascoltare \"HiBuddy\"")
             scheduleWakeRestart()
             return
         }
@@ -1317,6 +1345,8 @@ class MainActivity : AppCompatActivity() {
         }
         wakeListening = true
         updateStatus("In ascolto: dì \"HiBuddy\"")
+        wakeHandler.removeCallbacks(wakeWatchdog)
+        wakeHandler.postDelayed(wakeWatchdog, 8000L)
         try {
             recognizer.startListening(intent)
         } catch (t: Throwable) {
@@ -1327,17 +1357,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkWakePhrase(candidates: List<String>?) {
+    private fun checkWakePhrase(candidates: List<String>?): Boolean {
         val heard = candidates?.any { text ->
             val normalized = text.lowercase().replace(Regex("[^a-z]"), "")
             WAKE_PHRASES.any { normalized.contains(it) }
         } ?: false
-        if (!heard) return
+        if (!heard) return false
 
         stopWakeListening()
         beep()
         updateStatus("HiBuddy ti ha sentito!")
         startSession()
+        return true
     }
 
     private fun scheduleWakeRestart() {
@@ -1617,6 +1648,16 @@ class MainActivity : AppCompatActivity() {
         } catch (t: Throwable) {
             updateStatus("Impossibile avviare l'installazione: ${t.message}")
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (wakeMode && !isConnected && !isSessionStarting) maybeResumeWake()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopWakeListening()
     }
 
     override fun onDestroy() {
