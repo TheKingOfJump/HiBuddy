@@ -394,6 +394,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun enterVoiceSession() {
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = true
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+    }
+
+    private fun leaveVoiceSession() {
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.isSpeakerphoneOn = false
+            audioManager.mode = AudioManager.MODE_NORMAL
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+    }
+
     private fun startSession() {
         val prefs = getSharedPreferences("HiBuddyPrefs", Context.MODE_PRIVATE)
         val userToken = prefs.getString(PREF_KEY_NAME, "")?.trim() ?: ""
@@ -402,6 +422,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        enterVoiceSession()
         if (audioTrack == null) setupAudioOutput()
         setupAttempt = 0
         isSessionStarting = true
@@ -595,6 +616,7 @@ class MainActivity : AppCompatActivity() {
         audioTrack?.flush()
         audioTrack?.release()
         audioTrack = null
+        leaveVoiceSession()
         updateStatus("Sessione terminata")
         maybeResumeWake()
     }
@@ -715,6 +737,10 @@ class MainActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 t.printStackTrace()
             }
+            debugLog(
+                "cancellazione eco: " +
+                    (if (AcousticEchoCanceler.isAvailable()) "attiva" else "non disponibile sul telefono")
+            )
 
             val buffer = ByteArray(bufferSize)
             recorder.startRecording()
@@ -725,7 +751,7 @@ class MainActivity : AppCompatActivity() {
                 // Keep the microphone shut until the speaker has actually finished,
                 // otherwise HiBuddy transcribes its own voice as if it were the user.
                 val modelIsTalking = playbackQueue.isNotEmpty() ||
-                    now - lastPlaybackAt < 1500L ||
+                    now - lastPlaybackAt < 2500L ||
                     now - lastAudioChunkAt < 800L
                 if (read > 0 && !modelIsTalking) {
                     val base64Audio = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP)
