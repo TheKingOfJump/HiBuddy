@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private val PREF_WAKE = "wake_enabled"
     private val PREF_MODEL = "live_model"
     private val PREF_LOOSE_UPDATE = "update_loose_check"
+    private val MAX_TRANSCRIPT_CHARS = 6000
     private val WAKE_TARGETS = listOf("hibuddy", "aibuddy", "hibadi", "aibadi", "hibodi", "aibodi")
     private val VOICES = listOf(
         "Aoede", "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus",
@@ -111,6 +112,13 @@ class MainActivity : AppCompatActivity() {
     private var lastFrameJpeg: ByteArray? = null
 
     private val transcript = StringBuilder()
+    private val transcriptHandler = Handler(Looper.getMainLooper())
+    private var transcriptRefreshScheduled = false
+    private var frameExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val transcriptRefresh = Runnable {
+        transcriptRefreshScheduled = false
+        renderTranscript()
+    }
     private var transcriptSpeaker: String? = null
 
     private var speechRecognizer: SpeechRecognizer? = null
@@ -909,12 +917,27 @@ class MainActivity : AppCompatActivity() {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastFrameEncodedAt < 900L) return@setPreviewCallback
                         lastFrameEncodedAt = now
+                        val width: Int
+                        val height: Int
                         try {
                             val size = cam.parameters.previewSize
-                            val yuv = YuvImage(data, ImageFormat.NV21, size.width, size.height, null)
-                            val out = ByteArrayOutputStream()
-                            yuv.compressToJpeg(Rect(0, 0, size.width, size.height), 55, out)
-                            lastFrameJpeg = out.toByteArray()
+                            width = size.width
+                            height = size.height
+                        } catch (t: Throwable) {
+                            return@setPreviewCallback
+                        }
+                        val copy = data.copyOf()
+                        try {
+                            frameExecutor.execute {
+                                try {
+                                    val yuv = YuvImage(copy, ImageFormat.NV21, width, height, null)
+                                    val out = ByteArrayOutputStream()
+                                    yuv.compressToJpeg(Rect(0, 0, width, height), 55, out)
+                                    lastFrameJpeg = out.toByteArray()
+                                } catch (t: Throwable) {
+                                    t.printStackTrace()
+                                }
+                            }
                         } catch (t: Throwable) {
                             t.printStackTrace()
                         }
@@ -1233,8 +1256,8 @@ class MainActivity : AppCompatActivity() {
             if (transcript.isNotEmpty()) transcript.append('\n')
             transcript.append("\u2022 ").append(line)
             transcriptSpeaker = null
-            tvTranscript.text = transcript.toString()
-            transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
+            trimTranscript()
+            requestTranscriptRender()
         }
     }
 
@@ -1243,8 +1266,8 @@ class MainActivity : AppCompatActivity() {
             if (transcript.isNotEmpty()) transcript.append('\n')
             transcript.append("Tu: ").append(text)
             transcriptSpeaker = null
-            tvTranscript.text = transcript.toString()
-            transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
+            trimTranscript()
+            requestTranscriptRender()
         }
     }
 
@@ -1256,9 +1279,35 @@ class MainActivity : AppCompatActivity() {
                 transcriptSpeaker = speaker
             }
             transcript.append(chunk)
-            tvTranscript.text = transcript.toString()
-            transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
+            trimTranscript()
+            requestTranscriptRender()
         }
+    }
+
+    // Audio transcription arrives in many small chunks: repainting for each one
+    // froze the UI on this phone, so renders are coalesced and the text is capped.
+    private fun requestTranscriptRender() {
+        if (transcriptRefreshScheduled) return
+        transcriptRefreshScheduled = true
+        transcriptHandler.postDelayed(transcriptRefresh, 250L)
+    }
+
+    private fun renderTranscript() {
+        if (!::tvTranscript.isInitialized) return
+        tvTranscript.text = transcript.toString()
+        transcriptScroll.post { transcriptScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun trimTranscript() {
+        if (transcript.length <= MAX_TRANSCRIPT_CHARS) return
+        val cut = transcript.length - MAX_TRANSCRIPT_CHARS
+        val newline = transcript.indexOf("\n", cut)
+        if (newline > 0) {
+            transcript.delete(0, newline + 1)
+        } else {
+            transcript.delete(0, cut)
+        }
+        transcriptSpeaker = null
     }
 
     private fun clearTranscript() {
@@ -1736,6 +1785,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         destroyed = true
         wakeMode = false
+        transcriptHandler.removeCallbacksAndMessages(null)
+        frameExecutor.shutdownNow()
         stopWakeListening()
         stopSession()
         audioTrack?.release()
