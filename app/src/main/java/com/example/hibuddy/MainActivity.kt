@@ -140,6 +140,8 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var lastAudioChunkAt = 0L
     @Volatile
+    private var lastPlaybackAt = 0L
+    @Volatile
     private var playbackRunning = false
     private val playbackQueue = java.util.concurrent.LinkedBlockingQueue<String>()
     private var lastFrameEncodedAt = 0L
@@ -719,7 +721,12 @@ class MainActivity : AppCompatActivity() {
 
             while (isRecording && isConnected) {
                 val read = recorder.read(buffer, 0, buffer.size)
-                val modelIsTalking = SystemClock.elapsedRealtime() - lastAudioChunkAt < 1200L
+                val now = SystemClock.elapsedRealtime()
+                // Keep the microphone shut until the speaker has actually finished,
+                // otherwise HiBuddy transcribes its own voice as if it were the user.
+                val modelIsTalking = playbackQueue.isNotEmpty() ||
+                    now - lastPlaybackAt < 1500L ||
+                    now - lastAudioChunkAt < 800L
                 if (read > 0 && !modelIsTalking) {
                     val base64Audio = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP)
                     val msg = JSONObject().apply {
@@ -897,6 +904,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val bytes = Base64.decode(data, Base64.DEFAULT)
                     val written = track.write(bytes, 0, bytes.size)
+                    lastPlaybackAt = SystemClock.elapsedRealtime()
                     if (written < 0) debugLog("errore scrittura audio: $written")
                 } catch (t: Throwable) {
                     t.printStackTrace()
